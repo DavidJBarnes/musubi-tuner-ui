@@ -1,0 +1,19 @@
+[project]
+name = "musubi-tuner-ui"
+version = "0.1.0"
+description = "Web UI for musubi-tuner WAN 2.2 LoRA training"
+requires-python = ">=3.11"
+dependencies = [
+    "fastapi>=0.115",
+    "uvicorn[standard]>=0.34",
+    "sqlalchemy>=2.0",
+    "aiofiles>=24.1",
+    "python-multipart>=0.0.18",
+    "tomli>=2.0",
+    "tomli_w>=1.0",
+    "tensorboard>=2.18",
+    "pydantic-settings>=2.7",
+]
+
+[project.optional-dependencies]
+dev = ["ruff", "pytest", "httpx"]
