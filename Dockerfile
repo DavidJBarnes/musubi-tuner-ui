@@ -15,7 +15,7 @@ RUN apt-get update && \
 
 # Clone musubi-tuner and install its deps
 RUN git clone https://github.com/kohya-ss/musubi-tuner.git /opt/musubi-tuner && \
-    pip install --no-cache-dir -r /opt/musubi-tuner/requirements.txt
+    pip install --no-cache-dir /opt/musubi-tuner
 
 WORKDIR /app/backend
 COPY backend/pyproject.toml ./
