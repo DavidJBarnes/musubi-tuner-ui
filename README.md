@@ -2,6 +2,16 @@
 
 Web UI for managing WAN 2.2 LoRA training via musubi-tuner. Built for local use on a machine with an RTX 3090.
 
+## Screenshots
+
+| Dashboard | Config |
+|---|---|
+| ![Dashboard](docs/screenshots/dashboard.png) | ![Config](docs/screenshots/config.png) |
+
+| Jobs | Settings |
+|---|---|
+| ![Jobs](docs/screenshots/jobs.png) | ![Settings](docs/screenshots/settings.png) |
+
 ## Prerequisites
 
 - Python 3.11+
