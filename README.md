@@ -1,6 +1,6 @@
 # Musubi Tuner UI
 
-Web UI for managing WAN 2.2 LoRA training via musubi-tuner. Built for local use on a machine with an RTX 3090.
+Web UI for managing WAN 2.2 LoRA training via musubi-tuner. Built for local use with a handsome GPU.
 
 ## Screenshots
 
