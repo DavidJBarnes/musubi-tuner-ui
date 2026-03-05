@@ -74,6 +74,8 @@ def generate_run_script(
             f"    --batch_size 4",
             "",
         ])
+
+    lines.extend([
         'echo "### PHASE: training ###"',
         f"accelerate launch --num_cpu_threads_per_process 1 --mixed_precision {training_args.mixed_precision} \\",
         f"    src/musubi_tuner/wan_train_network.py \\",
@@ -90,7 +92,7 @@ def generate_run_script(
         f"    --discrete_flow_shift {training_args.discrete_flow_shift} \\",
         f"    --min_timestep {training_args.min_timestep} \\",
         f"    --max_timestep {training_args.max_timestep} \\",
-    ]
+    ])
 
     if training_args.preserve_distribution_shape:
         lines.append("    --preserve_distribution_shape \\")
