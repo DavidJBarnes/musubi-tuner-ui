@@ -86,6 +86,10 @@ def retry_job(job_id: str, db: Session = Depends(get_db)):
     if has_running_job():
         raise HTTPException(409, "A job is already running. Only one concurrent job is allowed.")
 
+    # Determine which phase to skip to on retry
+    # If we failed during training, skip caching phases
+    skip_to_phase = job.current_phase if job.current_phase in ("caching_text", "training") else None
+
     # Reset job state
     job.status = "pending"
     job.error_message = None
@@ -97,8 +101,8 @@ def retry_job(job_id: str, db: Session = Depends(get_db)):
     job.current_phase = None
     db.commit()
 
-    # Re-start in background
-    threading.Thread(target=start_job, args=(job.id,), daemon=True).start()
+    # Re-start in background, skipping completed phases
+    threading.Thread(target=start_job, args=(job.id, skip_to_phase), daemon=True).start()
 
     db.refresh(job)
     return job

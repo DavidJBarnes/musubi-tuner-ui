@@ -28,8 +28,16 @@ def generate_run_script(
     training_args: TrainingArgsForm,
     musubi_path: str,
     comfyui_models_path: str,
+    skip_to_phase: str | None = None,
 ) -> str:
-    """Generate a bash script that runs the full training pipeline."""
+    """Generate a bash script that runs the full training pipeline.
+
+    If skip_to_phase is set, skip all phases before it (e.g. "training"
+    skips caching_latents and caching_text).
+    """
+    PHASE_ORDER = ["caching_latents", "caching_text", "training"]
+    skip_until = PHASE_ORDER.index(skip_to_phase) if skip_to_phase in PHASE_ORDER else 0
+
     vae = os.path.expanduser(training_args.vae_path)
     t5 = os.path.expanduser(training_args.t5_path)
     dit = os.path.expanduser(training_args.dit_path)
@@ -43,20 +51,29 @@ def generate_run_script(
         "# Activate venv if it exists",
         'if [ -f "venv/bin/activate" ]; then source venv/bin/activate; fi',
         "",
-        'echo "### PHASE: caching_latents ###"',
-        f"python src/musubi_tuner/wan_cache_latents.py \\",
-        f"    --dataset_config {dataset_toml} \\",
-        f"    --vae {vae} \\",
-        f"    --i2v \\",
-        f"    --vae_cache_cpu \\",
-        f"    --batch_size {dataset_cfg.batch_size}",
-        "",
-        'echo "### PHASE: caching_text ###"',
-        f"python src/musubi_tuner/wan_cache_text_encoder_outputs.py \\",
-        f"    --dataset_config {dataset_toml} \\",
-        f"    --t5 {t5} \\",
-        f"    --batch_size 4",
-        "",
+    ]
+
+    if skip_until <= 0:
+        lines.extend([
+            'echo "### PHASE: caching_latents ###"',
+            f"python src/musubi_tuner/wan_cache_latents.py \\",
+            f"    --dataset_config {dataset_toml} \\",
+            f"    --vae {vae} \\",
+            f"    --i2v \\",
+            f"    --vae_cache_cpu \\",
+            f"    --batch_size {dataset_cfg.batch_size}",
+            "",
+        ])
+
+    if skip_until <= 1:
+        lines.extend([
+            'echo "### PHASE: caching_text ###"',
+            f"python src/musubi_tuner/wan_cache_text_encoder_outputs.py \\",
+            f"    --dataset_config {dataset_toml} \\",
+            f"    --t5 {t5} \\",
+            f"    --batch_size 4",
+            "",
+        ])
         'echo "### PHASE: training ###"',
         f"accelerate launch --num_cpu_threads_per_process 1 --mixed_precision {training_args.mixed_precision} \\",
         f"    src/musubi_tuner/wan_train_network.py \\",
@@ -137,7 +154,7 @@ def generate_dataset_toml(cfg: DatasetConfigForm) -> str:
     return tomli_w.dumps(data)
 
 
-def start_job(job_id: str) -> None:
+def start_job(job_id: str, skip_to_phase: str | None = None) -> None:
     """Start a training job in a detached subprocess."""
     db = SessionLocal()
     try:
@@ -167,7 +184,7 @@ def start_job(job_id: str) -> None:
         toml_path.write_text(toml_content)
 
         # Generate and write run script
-        script_content = generate_run_script(job, dataset_cfg, training_args, musubi_path, comfyui_models_path)
+        script_content = generate_run_script(job, dataset_cfg, training_args, musubi_path, comfyui_models_path, skip_to_phase=skip_to_phase)
         script_path = config.log_dir / f"{job.id}_run.sh"
         script_path.write_text(script_content)
         script_path.chmod(script_path.stat().st_mode | stat.S_IEXEC)
