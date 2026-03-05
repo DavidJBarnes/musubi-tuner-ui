@@ -29,6 +29,11 @@ export function JobDetailPage() {
     mutate();
   };
 
+  const retry = async () => {
+    await api.post(`/jobs/${job.id}/retry`, {});
+    mutate();
+  };
+
   return (
     <div>
       <div className="flex justify-between items-start mb-4">
@@ -38,14 +43,24 @@ export function JobDetailPage() {
             {job.job_type.replace(/_/g, " ")} &middot; {job.status.replace(/_/g, " ")}
           </p>
         </div>
-        {isActive && (
-          <button
-            onClick={cancel}
-            className="px-3 py-1.5 text-sm text-error border border-error/30 rounded hover:bg-error/10 transition-colors"
-          >
-            Cancel Job
-          </button>
-        )}
+        <div className="flex gap-2">
+          {isActive && (
+            <button
+              onClick={cancel}
+              className="px-3 py-1.5 text-sm text-error border border-error/30 rounded hover:bg-error/10 transition-colors"
+            >
+              Cancel Job
+            </button>
+          )}
+          {(job.status === "failed" || job.status === "cancelled") && (
+            <button
+              onClick={retry}
+              className="px-3 py-1.5 text-sm text-accent border border-accent/30 rounded hover:bg-accent/10 transition-colors"
+            >
+              Retry Job
+            </button>
+          )}
+        </div>
       </div>
 
       <div className="space-y-4">

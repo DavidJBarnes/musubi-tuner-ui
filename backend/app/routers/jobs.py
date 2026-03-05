@@ -75,6 +75,35 @@ def delete_job(job_id: str, db: Session = Depends(get_db)):
     return {"cancelled": True, "status": job.status}
 
 
+@router.post("/{job_id}/retry", response_model=JobRead)
+def retry_job(job_id: str, db: Session = Depends(get_db)):
+    """Retry a failed or cancelled job by re-generating the script and re-running."""
+    job = db.query(Job).filter(Job.id == job_id).first()
+    if not job:
+        raise HTTPException(404, "Job not found")
+    if job.status not in ("failed", "cancelled"):
+        raise HTTPException(400, f"Cannot retry a job with status '{job.status}'")
+    if has_running_job():
+        raise HTTPException(409, "A job is already running. Only one concurrent job is allowed.")
+
+    # Reset job state
+    job.status = "pending"
+    job.error_message = None
+    job.completed_at = None
+    job.started_at = None
+    job.pid = None
+    job.progress_current = 0
+    job.progress_total = 0
+    job.current_phase = None
+    db.commit()
+
+    # Re-start in background
+    threading.Thread(target=start_job, args=(job.id,), daemon=True).start()
+
+    db.refresh(job)
+    return job
+
+
 @router.get("/{job_id}/logs")
 async def stream_logs(job_id: str, db: Session = Depends(get_db)):
     job = db.query(Job).filter(Job.id == job_id).first()
