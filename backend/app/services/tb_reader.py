@@ -17,8 +17,9 @@ def read_loss_curve(tensorboard_dir: str) -> list[LossPoint]:
         if not event_files:
             return []
 
-        # Use the directory containing the first event file
-        event_dir = os.path.dirname(event_files[0])
+        # Use the directory containing the most recent event file
+        event_files.sort(key=os.path.getmtime)
+        event_dir = os.path.dirname(event_files[-1])
         ea = EventAccumulator(event_dir)
         ea.Reload()
 
