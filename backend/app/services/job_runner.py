@@ -219,6 +219,15 @@ def start_job(job_id: str, skip_to_phase: str | None = None) -> None:
         db.close()
 
 
+def _is_training_process(pid: int) -> bool:
+    """Check if a PID is still a training-related process (not a reused PID)."""
+    try:
+        cmdline = Path(f"/proc/{pid}/cmdline").read_bytes().decode("utf-8", errors="replace")
+        return "musubi" in cmdline or "wan_" in cmdline or "accelerate" in cmdline
+    except OSError:
+        return False
+
+
 def _monitor_job(job_id: str, pid: int) -> None:
     """Background thread that monitors a running job for progress and completion."""
     while True:
@@ -229,10 +238,15 @@ def _monitor_job(job_id: str, pid: int) -> None:
             if not job or job.status in ("completed", "failed", "cancelled"):
                 return
 
-            # Check if process is still alive
+            # Check if process is still alive AND is our training process
+            process_alive = False
             try:
                 os.kill(pid, 0)
+                process_alive = _is_training_process(pid)
             except OSError:
+                process_alive = False
+
+            if not process_alive:
                 # Process ended — check exit status
                 try:
                     _, status = os.waitpid(pid, os.WNOHANG)
@@ -335,11 +349,10 @@ def reconcile_jobs() -> None:
 
         for job in running_jobs:
             if job.pid:
-                try:
-                    os.kill(job.pid, 0)
+                if _is_training_process(job.pid):
                     # Process still alive — resume monitoring
                     threading.Thread(target=_monitor_job, args=(job.id, job.pid), daemon=True).start()
-                except OSError:
+                else:
                     job.status = "failed"
                     job.error_message = _extract_error_from_log(job.log_file) or "Process lost (backend restarted)"
                     job.completed_at = datetime.now(timezone.utc)
