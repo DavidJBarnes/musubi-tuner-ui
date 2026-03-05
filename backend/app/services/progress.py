@@ -3,6 +3,8 @@ import re
 
 # Match tqdm output like: " 45%|████      | 9/20 [02:15<02:45, 15.00s/it]"
 TQDM_RE = re.compile(r"(\d+)%\|.*?\|\s*(\d+)/(\d+)")
+# Match tqdm without total like: "5it [04:16, 51.19s/it]"
+TQDM_NO_TOTAL_RE = re.compile(r"(\d+)it\s*\[")
 # Match speed from tqdm like: "78.62s/it" or "2076.39it/s"
 SPEED_RE = re.compile(r"(\d+\.?\d*)(s/it|it/s)")
 # Match phase markers like: "### PHASE: caching_latents ###"
@@ -45,6 +47,10 @@ def parse_progress_from_log(log_path: str) -> dict:
         if tm:
             current = int(tm.group(2))
             total = int(tm.group(3))
+        else:
+            tn = TQDM_NO_TOTAL_RE.search(line)
+            if tn:
+                current = int(tn.group(1))
 
         sm = SPEED_RE.search(line)
         if sm:
