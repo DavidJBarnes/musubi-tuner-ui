@@ -18,7 +18,7 @@ def _get_dataset_dir(db: Session) -> Path:
     s = db.query(Setting).filter(Setting.key == "default_dataset_dir").first()
     if not s or not s.value:
         raise HTTPException(400, "default_dataset_dir not configured")
-    p = Path(s.value)
+    p = Path(os.path.expanduser(s.value))
     if not p.is_dir():
         raise HTTPException(400, f"Dataset directory does not exist: {p}")
     return p
