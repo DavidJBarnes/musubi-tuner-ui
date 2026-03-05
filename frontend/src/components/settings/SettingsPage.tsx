@@ -59,7 +59,7 @@ export function SettingsPage() {
           <p className="text-[10px] text-text-dim mt-1">Base models directory (DiT, VAE, T5)</p>
         </div>
         <div>
-          <label className="block text-xs text-text-dim mb-1">Default Dataset Directory</label>
+          <label className="block text-xs text-text-dim mb-1">Datasets Base Directory</label>
           <input
             className={inputCls}
             value={form.default_dataset_dir}

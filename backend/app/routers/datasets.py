@@ -8,28 +8,100 @@ from fastapi.responses import FileResponse
 from sqlalchemy.orm import Session
 
 from ..database import get_db
-from ..models import Setting
-from ..schemas import VideoInfo
+from ..models import Dataset, Setting
+from ..schemas import DatasetCreate, DatasetInfo, VideoInfo
 
 router = APIRouter(prefix="/datasets")
 
+VIDEO_EXTS = {".mp4", ".webm", ".mkv", ".avi", ".mov"}
 
-def _get_dataset_dir(db: Session) -> Path:
+
+def _get_base_dir(db: Session) -> Path:
     s = db.query(Setting).filter(Setting.key == "default_dataset_dir").first()
     if not s or not s.value:
         raise HTTPException(400, "default_dataset_dir not configured")
     p = Path(os.path.expanduser(s.value))
     if not p.is_dir():
-        raise HTTPException(400, f"Dataset directory does not exist: {p}")
+        raise HTTPException(400, f"Dataset base directory does not exist: {p}")
     return p
 
 
-VIDEO_EXTS = {".mp4", ".webm", ".mkv", ".avi", ".mov"}
+def _get_dataset_dir(db: Session, name: str) -> Path:
+    base = _get_base_dir(db)
+    d = base / name
+    if not d.is_dir():
+        raise HTTPException(404, f"Dataset folder not found: {name}")
+    return d
 
 
-@router.get("/videos", response_model=list[VideoInfo])
-def list_videos(db: Session = Depends(get_db)):
-    dataset_dir = _get_dataset_dir(db)
+def _count_videos(folder: Path) -> int:
+    if not folder.is_dir():
+        return 0
+    return sum(1 for f in folder.iterdir() if f.suffix.lower() in VIDEO_EXTS and f.is_file())
+
+
+def _auto_discover(db: Session, base: Path) -> None:
+    """Register any on-disk subdirectories not already in DB."""
+    existing = {d.name for d in db.query(Dataset).all()}
+    for entry in base.iterdir():
+        if entry.is_dir() and not entry.name.startswith(".") and entry.name not in existing:
+            db.add(Dataset(name=entry.name))
+    db.commit()
+
+
+# --- Dataset CRUD ---
+
+@router.get("", response_model=list[DatasetInfo])
+def list_datasets(db: Session = Depends(get_db)):
+    base = _get_base_dir(db)
+    _auto_discover(db, base)
+    datasets = db.query(Dataset).order_by(Dataset.name).all()
+    result = []
+    for ds in datasets:
+        folder = base / ds.name
+        result.append(DatasetInfo(
+            id=ds.id,
+            name=ds.name,
+            video_count=_count_videos(folder),
+            created_at=ds.created_at,
+        ))
+    return result
+
+
+@router.post("", response_model=DatasetInfo)
+def create_dataset(data: DatasetCreate, db: Session = Depends(get_db)):
+    base = _get_base_dir(db)
+    if db.query(Dataset).filter(Dataset.name == data.name).first():
+        raise HTTPException(409, f"Dataset '{data.name}' already exists")
+    folder = base / data.name
+    folder.mkdir(parents=True, exist_ok=True)
+    ds = Dataset(name=data.name)
+    db.add(ds)
+    db.commit()
+    db.refresh(ds)
+    return DatasetInfo(
+        id=ds.id,
+        name=ds.name,
+        video_count=0,
+        created_at=ds.created_at,
+    )
+
+
+@router.delete("/{name}")
+def delete_dataset(name: str, db: Session = Depends(get_db)):
+    ds = db.query(Dataset).filter(Dataset.name == name).first()
+    if not ds:
+        raise HTTPException(404, "Dataset not found")
+    db.delete(ds)
+    db.commit()
+    return {"deleted": name}
+
+
+# --- Videos within a dataset ---
+
+@router.get("/{name}/videos", response_model=list[VideoInfo])
+def list_videos(name: str, db: Session = Depends(get_db)):
+    dataset_dir = _get_dataset_dir(db, name)
     videos = []
     for f in sorted(dataset_dir.iterdir()):
         if f.suffix.lower() in VIDEO_EXTS and f.is_file():
@@ -47,20 +119,18 @@ def list_videos(db: Session = Depends(get_db)):
     return videos
 
 
-@router.get("/videos/{name}/thumb")
-def get_thumbnail(name: str, db: Session = Depends(get_db)):
-    dataset_dir = _get_dataset_dir(db)
-    # Find the video file
-    video_file = _find_video(dataset_dir, name)
+@router.get("/{name}/videos/{video}/thumb")
+def get_thumbnail(name: str, video: str, db: Session = Depends(get_db)):
+    dataset_dir = _get_dataset_dir(db, name)
+    video_file = _find_video(dataset_dir, video)
     if not video_file:
         raise HTTPException(404, "Video not found")
 
     thumb_dir = dataset_dir / ".thumbs"
     thumb_dir.mkdir(exist_ok=True)
-    thumb_path = thumb_dir / f"{name}.jpg"
+    thumb_path = thumb_dir / f"{video}.jpg"
 
     if not thumb_path.exists():
-        # Extract first frame with ffmpeg
         try:
             subprocess.run(
                 [
@@ -80,30 +150,29 @@ def get_thumbnail(name: str, db: Session = Depends(get_db)):
     raise HTTPException(500, "Failed to generate thumbnail")
 
 
-@router.get("/videos/{name}/caption")
-def read_caption(name: str, db: Session = Depends(get_db)):
-    dataset_dir = _get_dataset_dir(db)
-    caption_file = _find_caption_path(dataset_dir, name)
+@router.get("/{name}/videos/{video}/caption")
+def read_caption(name: str, video: str, db: Session = Depends(get_db)):
+    dataset_dir = _get_dataset_dir(db, name)
+    caption_file = _find_caption_path(dataset_dir, video)
     caption = caption_file.read_text().strip() if caption_file.exists() else ""
-    return {"name": name, "caption": caption}
+    return {"name": video, "caption": caption}
 
 
-@router.put("/videos/{name}/caption")
-def write_caption(name: str, body: dict, db: Session = Depends(get_db)):
-    dataset_dir = _get_dataset_dir(db)
+@router.put("/{name}/videos/{video}/caption")
+def write_caption(name: str, video: str, body: dict, db: Session = Depends(get_db)):
+    dataset_dir = _get_dataset_dir(db, name)
     caption = body.get("caption", "")
-    # Write caption next to video file
-    video_file = _find_video(dataset_dir, name)
+    video_file = _find_video(dataset_dir, video)
     if not video_file:
         raise HTTPException(404, "Video not found")
     caption_path = video_file.with_suffix(".txt")
     caption_path.write_text(caption)
-    return {"name": name, "caption": caption}
+    return {"name": video, "caption": caption}
 
 
-@router.post("/videos/upload")
-async def upload_videos(files: list[UploadFile], db: Session = Depends(get_db)):
-    dataset_dir = _get_dataset_dir(db)
+@router.post("/{name}/videos/upload")
+async def upload_videos(name: str, files: list[UploadFile], db: Session = Depends(get_db)):
+    dataset_dir = _get_dataset_dir(db, name)
     uploaded = []
     for file in files:
         if file.filename:
@@ -115,10 +184,10 @@ async def upload_videos(files: list[UploadFile], db: Session = Depends(get_db)):
     return {"uploaded": uploaded}
 
 
-@router.delete("/videos/{name}")
-def delete_video(name: str, db: Session = Depends(get_db)):
-    dataset_dir = _get_dataset_dir(db)
-    video_file = _find_video(dataset_dir, name)
+@router.delete("/{name}/videos/{video}")
+def delete_video(name: str, video: str, db: Session = Depends(get_db)):
+    dataset_dir = _get_dataset_dir(db, name)
+    video_file = _find_video(dataset_dir, video)
     if not video_file:
         raise HTTPException(404, "Video not found")
 
@@ -126,12 +195,11 @@ def delete_video(name: str, db: Session = Depends(get_db)):
     caption_path = video_file.with_suffix(".txt")
     if caption_path.exists():
         caption_path.unlink()
-    # Remove thumbnail if exists
-    thumb = dataset_dir / ".thumbs" / f"{name}.jpg"
+    thumb = dataset_dir / ".thumbs" / f"{video}.jpg"
     if thumb.exists():
         thumb.unlink()
 
-    return {"deleted": name}
+    return {"deleted": video}
 
 
 def _find_video(dataset_dir: Path, name: str) -> Path | None:
@@ -143,7 +211,6 @@ def _find_video(dataset_dir: Path, name: str) -> Path | None:
 
 
 def _find_caption_path(dataset_dir: Path, name: str) -> Path:
-    # Caption lives next to the video
     video = _find_video(dataset_dir, name)
     if video:
         return video.with_suffix(".txt")

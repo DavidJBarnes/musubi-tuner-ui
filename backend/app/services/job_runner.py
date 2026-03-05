@@ -263,6 +263,7 @@ def _monitor_job(job_id: str, pid: int) -> None:
                 job.completed_at = datetime.now(timezone.utc)
                 job.pid = None
                 db.commit()
+                _advance_queue()
                 return
 
             # Update progress from log
@@ -319,22 +320,29 @@ def _infer_exit_from_log(log_file: str | None) -> int:
 
 
 def cancel_job(job_id: str) -> bool:
-    """Cancel a running job by sending SIGTERM to its process group."""
+    """Cancel a running or queued job."""
     db = SessionLocal()
     try:
         job = db.query(Job).filter(Job.id == job_id).first()
-        if not job or not job.pid:
+        if not job:
             return False
 
-        try:
-            os.killpg(os.getpgid(job.pid), signal.SIGTERM)
-        except (OSError, ProcessLookupError):
-            pass
+        was_running = job.status in ("caching_latents", "caching_text", "training")
+
+        if job.pid:
+            try:
+                os.killpg(os.getpgid(job.pid), signal.SIGTERM)
+            except (OSError, ProcessLookupError):
+                pass
 
         job.status = "cancelled"
         job.completed_at = datetime.now(timezone.utc)
         job.pid = None
+        job.queue_position = None
         db.commit()
+
+        if was_running:
+            _advance_queue()
         return True
     finally:
         db.close()
@@ -348,10 +356,12 @@ def reconcile_jobs() -> None:
             Job.status.in_(["caching_latents", "caching_text", "training", "pending"])
         ).all()
 
+        has_active = False
         for job in running_jobs:
             if job.pid:
                 if _is_training_process(job.pid):
                     # Process still alive — resume monitoring
+                    has_active = True
                     threading.Thread(target=_monitor_job, args=(job.id, job.pid), daemon=True).start()
                 else:
                     job.status = "failed"
@@ -363,12 +373,17 @@ def reconcile_jobs() -> None:
                     pass  # Pending jobs without PID are fine
                 elif job.dataset_config == "{}":
                     # Adopted job (no PID) — resume monitoring
+                    has_active = True
                     threading.Thread(target=_monitor_adopted_job, args=(job.id,), daemon=True).start()
                 else:
                     job.status = "failed"
                     job.error_message = "No PID recorded (backend restarted)"
                     job.completed_at = datetime.now(timezone.utc)
         db.commit()
+
+        # If no running job, try to advance the queue
+        if not has_active:
+            _advance_queue()
     finally:
         db.close()
 
@@ -434,5 +449,33 @@ def has_running_job() -> bool:
         return db.query(Job).filter(
             Job.status.in_(["caching_latents", "caching_text", "training"])
         ).count() > 0
+    finally:
+        db.close()
+
+
+def _assign_queue_position(db: Session) -> int:
+    """Return the next queue position (max + 1)."""
+    from sqlalchemy import func
+    max_pos = db.query(func.max(Job.queue_position)).scalar()
+    return (max_pos or 0) + 1
+
+
+def _advance_queue() -> None:
+    """Find the lowest queue_position job with status 'queued' and start it."""
+    db = SessionLocal()
+    try:
+        next_job = (
+            db.query(Job)
+            .filter(Job.status == "queued")
+            .order_by(Job.queue_position.asc())
+            .first()
+        )
+        if not next_job:
+            return
+
+        next_job.queue_position = None
+        db.commit()
+
+        threading.Thread(target=start_job, args=(next_job.id,), daemon=True).start()
     finally:
         db.close()

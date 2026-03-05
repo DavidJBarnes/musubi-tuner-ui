@@ -1,10 +1,11 @@
 import { useCallback, useRef, useState } from "react";
 
 interface Props {
+  datasetName: string;
   onUploaded: () => void;
 }
 
-export function UploadDropzone({ onUploaded }: Props) {
+export function UploadDropzone({ datasetName, onUploaded }: Props) {
   const [uploading, setUploading] = useState(false);
   const [dragOver, setDragOver] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
@@ -17,13 +18,13 @@ export function UploadDropzone({ onUploaded }: Props) {
         fd.append("files", f);
       }
       try {
-        await fetch("/api/datasets/videos/upload", { method: "POST", body: fd });
+        await fetch(`/api/datasets/${encodeURIComponent(datasetName)}/videos/upload`, { method: "POST", body: fd });
         onUploaded();
       } finally {
         setUploading(false);
       }
     },
-    [onUploaded],
+    [datasetName, onUploaded],
   );
 
   return (

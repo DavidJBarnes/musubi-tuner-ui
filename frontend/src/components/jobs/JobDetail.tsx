@@ -8,7 +8,7 @@ import { LossChart } from "./LossChart";
 import { LogViewer } from "./LogViewer";
 import { ProgressBar } from "./ProgressBar";
 
-const ACTIVE = ["caching_latents", "caching_text", "training", "pending"];
+const ACTIVE = ["caching_latents", "caching_text", "training", "pending", "queued"];
 
 export function JobDetailPage() {
   const { id } = useParams<{ id: string }>();
@@ -41,6 +41,7 @@ export function JobDetailPage() {
           <h2 className="text-xl font-bold">{job.name}</h2>
           <p className="text-sm text-text-dim">
             {job.job_type.replace(/_/g, " ")} &middot; {job.status.replace(/_/g, " ")}
+            {job.dataset_name && <> &middot; {job.dataset_name}</>}
           </p>
         </div>
         <div className="flex gap-2">
@@ -73,6 +74,7 @@ export function JobDetailPage() {
           epoch={stats?.epoch ?? 0}
           totalEpochs={stats?.total_epochs ?? 0}
           saveEveryNEpochs={stats?.save_every_n_epochs ?? 1}
+          avrLoss={stats?.avr_loss ?? null}
         />
 
         {/* Logs + Checkpoints side by side */}

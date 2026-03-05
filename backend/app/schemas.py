@@ -1,6 +1,7 @@
+import re
 from datetime import datetime
 
-from pydantic import BaseModel
+from pydantic import BaseModel, field_validator
 
 
 # --- Settings ---
@@ -29,6 +30,26 @@ class GpuStats(BaseModel):
 
 
 # --- Dataset ---
+class DatasetInfo(BaseModel):
+    id: str
+    name: str
+    video_count: int = 0
+    created_at: datetime
+
+    model_config = {"from_attributes": True}
+
+
+class DatasetCreate(BaseModel):
+    name: str
+
+    @field_validator("name")
+    @classmethod
+    def validate_name(cls, v: str) -> str:
+        if not re.match(r"^[a-zA-Z0-9_-]+$", v):
+            raise ValueError("Name must be alphanumeric, hyphens, or underscores only")
+        return v
+
+
 class VideoInfo(BaseModel):
     name: str
     filename: str
@@ -103,6 +124,7 @@ class JobCreate(BaseModel):
     job_type: str  # high_noise | low_noise | both
     dataset_config: DatasetConfigForm
     training_args: TrainingArgsForm
+    dataset_name: str | None = None
 
 
 class JobAdopt(BaseModel):
@@ -127,6 +149,8 @@ class JobRead(BaseModel):
     started_at: datetime | None = None
     completed_at: datetime | None = None
     error_message: str | None = None
+    queue_position: int | None = None
+    dataset_name: str | None = None
 
     model_config = {"from_attributes": True}
 

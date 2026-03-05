@@ -11,7 +11,7 @@ from sqlalchemy.orm import Session
 from ..database import get_db
 from ..models import Job
 from ..schemas import JobAdopt, JobCreate, JobDetail, JobRead, LossPoint
-from ..services.job_runner import cancel_job, has_running_job, start_job, adopt_job
+from ..services.job_runner import cancel_job, has_running_job, start_job, adopt_job, _assign_queue_position
 from ..services.progress import parse_progress_from_log
 from ..services.log_streamer import tail_log
 from ..services.tb_reader import read_loss_curve
@@ -27,21 +27,28 @@ def list_jobs(db: Session = Depends(get_db)):
 
 @router.post("", response_model=JobRead)
 def create_job(data: JobCreate, db: Session = Depends(get_db)):
-    if has_running_job():
-        raise HTTPException(409, "A job is already running. Only one concurrent job is allowed.")
+    running = has_running_job()
 
     job = Job(
         name=data.name,
         job_type=data.job_type,
         dataset_config=data.dataset_config.model_dump_json(),
         training_args=data.training_args.model_dump_json(),
+        dataset_name=data.dataset_name,
     )
+
+    if running:
+        job.status = "queued"
+        job.queue_position = _assign_queue_position(db)
+    else:
+        job.status = "pending"
+
     db.add(job)
     db.commit()
     db.refresh(job)
 
-    # Start job in background thread
-    threading.Thread(target=start_job, args=(job.id,), daemon=True).start()
+    if not running:
+        threading.Thread(target=start_job, args=(job.id,), daemon=True).start()
 
     return job
 
@@ -67,9 +74,8 @@ def delete_job(job_id: str, db: Session = Depends(get_db)):
     if not job:
         raise HTTPException(404, "Job not found")
 
-    if job.status in ("caching_latents", "caching_text", "training"):
+    if job.status in ("caching_latents", "caching_text", "training", "queued"):
         cancel_job(job_id)
-        # Refresh after cancel
         db.refresh(job)
 
     return {"cancelled": True, "status": job.status}
@@ -83,15 +89,13 @@ def retry_job(job_id: str, db: Session = Depends(get_db)):
         raise HTTPException(404, "Job not found")
     if job.status not in ("failed", "cancelled"):
         raise HTTPException(400, f"Cannot retry a job with status '{job.status}'")
-    if has_running_job():
-        raise HTTPException(409, "A job is already running. Only one concurrent job is allowed.")
+
+    running = has_running_job()
 
     # Determine which phase to skip to on retry
-    # If we failed during training, skip caching phases
     skip_to_phase = job.current_phase if job.current_phase in ("caching_text", "training") else None
 
     # Reset job state
-    job.status = "pending"
     job.error_message = None
     job.completed_at = None
     job.started_at = None
@@ -99,10 +103,17 @@ def retry_job(job_id: str, db: Session = Depends(get_db)):
     job.progress_current = 0
     job.progress_total = 0
     job.current_phase = None
+
+    if running:
+        job.status = "queued"
+        job.queue_position = _assign_queue_position(db)
+    else:
+        job.status = "pending"
+
     db.commit()
 
-    # Re-start in background, skipping completed phases
-    threading.Thread(target=start_job, args=(job.id, skip_to_phase), daemon=True).start()
+    if not running:
+        threading.Thread(target=start_job, args=(job.id, skip_to_phase), daemon=True).start()
 
     db.refresh(job)
     return job
@@ -170,6 +181,7 @@ def get_job_stats(job_id: str, db: Session = Depends(get_db)):
         "current": progress.get("current", 0),
         "total": total,
         "save_every_n_epochs": save_every,
+        "avr_loss": progress.get("avr_loss"),
     }
 
 

@@ -1,7 +1,8 @@
 import { useEffect, useState } from "react";
 import useSWR from "swr";
 import { api, fetcher } from "../../api/client";
-import type { DatasetConfig, Settings, TrainingArgs } from "../../api/types";
+import type { DatasetConfig, DatasetInfo, Settings, TrainingArgs } from "../../api/types";
+import { useJobs } from "../../hooks/useJobs";
 import { DatasetTomlForm } from "./DatasetTomlForm";
 import { TrainingArgsForm } from "./TrainingArgsForm";
 
@@ -60,26 +61,27 @@ const JOB_TYPE_SETTINGS: Record<string, Partial<TrainingArgs>> = {
   },
 };
 
+const ACTIVE_STATUSES = ["caching_latents", "caching_text", "training"];
+
 export function ConfigPage() {
   const { data: settings } = useSWR<Settings>("/settings", fetcher);
+  const { data: datasets } = useSWR<DatasetInfo[]>("/datasets", fetcher);
+  const { jobs } = useJobs();
   const [datasetCfg, setDatasetCfg] = useState<DatasetConfig>(DEFAULT_DATASET);
   const [trainingArgs, setTrainingArgs] = useState<TrainingArgs>(DEFAULT_ARGS);
   const [tomlPreview, setTomlPreview] = useState("");
   const [errors, setErrors] = useState<string[]>([]);
   const [jobName, setJobName] = useState("");
   const [jobType, setJobType] = useState("high_noise");
+  const [selectedDataset, setSelectedDataset] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [submitResult, setSubmitResult] = useState<string | null>(null);
+
+  const hasRunningJob = jobs.some((j) => ACTIVE_STATUSES.includes(j.status));
 
   // Auto-fill paths from settings
   useEffect(() => {
     if (settings) {
-      setDatasetCfg((prev) => ({
-        ...prev,
-        video_directory: prev.video_directory || settings.default_dataset_dir,
-        cache_directory:
-          prev.cache_directory || (settings.default_dataset_dir ? settings.default_dataset_dir.replace(/\/?$/, "/cache") : ""),
-      }));
       const comfy = settings.comfyui_models_path;
       if (comfy) {
         setTrainingArgs((prev) => ({
@@ -98,6 +100,18 @@ export function ConfigPage() {
       }));
     }
   }, [settings]);
+
+  // When dataset selection changes, auto-fill video/cache dirs
+  useEffect(() => {
+    if (selectedDataset && settings?.default_dataset_dir) {
+      const base = settings.default_dataset_dir.replace(/\/+$/, "");
+      setDatasetCfg((prev) => ({
+        ...prev,
+        video_directory: `${base}/${selectedDataset}`,
+        cache_directory: `${base}/${selectedDataset}/cache`,
+      }));
+    }
+  }, [selectedDataset, settings]);
 
   // Update args when job type changes
   const handleJobTypeChange = (newType: string) => {
@@ -148,8 +162,9 @@ export function ConfigPage() {
         job_type: jobType,
         dataset_config: datasetCfg,
         training_args: trainingArgs,
+        dataset_name: selectedDataset || null,
       });
-      setSubmitResult("Job created and started!");
+      setSubmitResult(hasRunningJob ? "Job added to queue!" : "Job created and started!");
     } catch (e: unknown) {
       setSubmitResult(`Error: ${e instanceof Error ? e.message : String(e)}`);
     } finally {
@@ -164,7 +179,7 @@ export function ConfigPage() {
       {/* Job creation — top of page */}
       <div className="mb-6 bg-surface-2 rounded-lg border border-border p-4">
         <h3 className="font-medium text-sm mb-3">Create Job</h3>
-        <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 mb-3">
+        <div className="grid grid-cols-1 sm:grid-cols-4 gap-3 mb-3">
           <div>
             <label className="block text-xs text-text-dim mb-1">Job Name</label>
             <input
@@ -184,6 +199,21 @@ export function ConfigPage() {
               <option value="high_noise">High Noise (900-1000)</option>
               <option value="low_noise">Low Noise (0-900)</option>
               <option value="both">Both (sequential)</option>
+            </select>
+          </div>
+          <div>
+            <label className="block text-xs text-text-dim mb-1">Dataset</label>
+            <select
+              value={selectedDataset}
+              onChange={(e) => setSelectedDataset(e.target.value)}
+              className="w-full bg-surface border border-border rounded px-3 py-1.5 text-sm text-text focus:outline-none focus:border-accent"
+            >
+              <option value="">Manual paths</option>
+              {datasets?.map((ds) => (
+                <option key={ds.id} value={ds.name}>
+                  {ds.name} ({ds.video_count} videos)
+                </option>
+              ))}
             </select>
           </div>
           <div className="flex items-end gap-2">
@@ -206,7 +236,7 @@ export function ConfigPage() {
           disabled={submitting}
           className="px-4 py-2 bg-accent text-white text-sm font-medium rounded hover:bg-accent-hover disabled:opacity-50 transition-colors"
         >
-          {submitting ? "Starting..." : "Create & Start Job"}
+          {submitting ? "Submitting..." : hasRunningJob ? "Add to Queue" : "Create & Start Job"}
         </button>
         {submitResult && (
           <p className={`mt-2 text-sm ${submitResult.startsWith("Error") ? "text-error" : "text-success"}`}>
