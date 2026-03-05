@@ -40,7 +40,7 @@ export function ProgressBar({ current, total, phase, status, speed, epoch, total
           )}
         </span>
         <span className="text-sm text-text-dim">
-          {total > 0 ? `${current} / ${total} (${pct}%)` : status}
+          {total > 0 ? `${current} / ${total} (${pct}%)` : current > 0 ? `${current} processed` : status}
         </span>
       </div>
 
