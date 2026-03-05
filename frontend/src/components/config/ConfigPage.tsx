@@ -145,44 +145,8 @@ export function ConfigPage() {
     <div>
       <h2 className="text-xl font-bold mb-4">Training Config</h2>
 
-      {/* Preset selector */}
-      {presets && presets.length > 0 && (
-        <div className="mb-4">
-          <label className="block text-xs text-text-dim mb-1">Load Preset</label>
-          <div className="flex gap-2">
-            {presets.map((p) => (
-              <button
-                key={p.filename}
-                onClick={() => loadPreset(p.filename)}
-                className="px-3 py-1.5 text-sm bg-surface-2 border border-border rounded hover:border-accent/50 transition-colors"
-                title={p.description}
-              >
-                {p.name}
-              </button>
-            ))}
-          </div>
-        </div>
-      )}
-
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-        <DatasetTomlForm config={datasetCfg} onChange={setDatasetCfg} />
-        <TrainingArgsForm args={trainingArgs} onChange={setTrainingArgs} />
-      </div>
-
-      {/* Errors */}
-      {errors.length > 0 && (
-        <div className="mt-4 bg-error/10 border border-error/30 rounded p-3">
-          <p className="text-sm font-medium text-error mb-1">Validation Errors:</p>
-          <ul className="text-sm text-error list-disc list-inside">
-            {errors.map((e, i) => (
-              <li key={i}>{e}</li>
-            ))}
-          </ul>
-        </div>
-      )}
-
-      {/* Job creation */}
-      <div className="mt-6 bg-surface-2 rounded-lg border border-border p-4">
+      {/* Job creation — top of page */}
+      <div className="mb-6 bg-surface-2 rounded-lg border border-border p-4">
         <h3 className="font-medium text-sm mb-3">Create Job</h3>
         <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 mb-3">
           <div>
@@ -233,6 +197,40 @@ export function ConfigPage() {
             {submitResult}
           </p>
         )}
+      </div>
+
+      {/* Errors */}
+      {errors.length > 0 && (
+        <div className="mb-4 bg-error/10 border border-error/30 rounded p-3">
+          <p className="text-sm font-medium text-error mb-1">Validation Errors:</p>
+          <ul className="text-sm text-error list-disc list-inside">
+            {errors.map((e, i) => (
+              <li key={i}>{e}</li>
+            ))}
+          </ul>
+        </div>
+      )}
+
+      {/* Preset buttons — inline above the forms */}
+      {presets && presets.length > 0 && (
+        <div className="mb-4 flex items-center gap-2">
+          <span className="text-xs text-text-dim">Quick fill:</span>
+          {presets.map((p) => (
+            <button
+              key={p.filename}
+              onClick={() => loadPreset(p.filename)}
+              className="px-3 py-1 text-xs bg-surface-2 border border-border rounded hover:border-accent/50 transition-colors"
+              title={p.description}
+            >
+              {p.name}
+            </button>
+          ))}
+        </div>
+      )}
+
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+        <DatasetTomlForm config={datasetCfg} onChange={setDatasetCfg} />
+        <TrainingArgsForm args={trainingArgs} onChange={setTrainingArgs} />
       </div>
 
       {/* TOML preview */}
