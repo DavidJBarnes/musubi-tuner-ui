@@ -202,7 +202,7 @@ def start_job(job_id: str, skip_to_phase: str | None = None) -> None:
             )
 
         job.pid = proc.pid
-        job.status = "caching_latents"
+        job.status = skip_to_phase or "caching_latents"
         job.started_at = datetime.now(timezone.utc)
         job.tensorboard_dir = os.path.expanduser(training_args.logging_dir)
         job.output_dir = os.path.expanduser(training_args.output_dir)
@@ -244,7 +244,7 @@ def _monitor_job(job_id: str, pid: int) -> None:
                     job.status = "completed"
                 else:
                     job.status = "failed"
-                    job.error_message = f"Process exited with code {exit_code}"
+                    job.error_message = _extract_error_from_log(job.log_file) or f"Process exited with code {exit_code}"
                 job.completed_at = datetime.now(timezone.utc)
                 job.pid = None
                 db.commit()
@@ -274,6 +274,29 @@ def _log_has_done_phase(log_file: str | None) -> bool:
             return "### PHASE: done ###" in f.read()
     except OSError:
         return False
+
+
+def _extract_error_from_log(log_file: str | None) -> str | None:
+    """Extract a meaningful error message from the last lines of a log file."""
+    if not log_file or not os.path.exists(log_file):
+        return None
+    try:
+        with open(log_file, "rb") as f:
+            f.seek(0, 2)
+            size = f.tell()
+            f.seek(max(0, size - 4096))
+            tail = f.read().decode("utf-8", errors="replace")
+        # Look for common error patterns
+        for line in reversed(tail.splitlines()):
+            line = line.strip()
+            if not line:
+                continue
+            for pattern in ("Error:", "OutOfMemoryError:", "RuntimeError:", "ValueError:", "FileNotFoundError:"):
+                if pattern in line:
+                    return line[:300]
+        return None
+    except OSError:
+        return None
 
 
 def _infer_exit_from_log(log_file: str | None) -> int:
@@ -318,7 +341,7 @@ def reconcile_jobs() -> None:
                     threading.Thread(target=_monitor_job, args=(job.id, job.pid), daemon=True).start()
                 except OSError:
                     job.status = "failed"
-                    job.error_message = "Process lost (backend restarted)"
+                    job.error_message = _extract_error_from_log(job.log_file) or "Process lost (backend restarted)"
                     job.completed_at = datetime.now(timezone.utc)
                     job.pid = None
             else:
