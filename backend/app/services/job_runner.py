@@ -46,6 +46,7 @@ def generate_run_script(
     lines = [
         "#!/bin/bash",
         "set -e",
+        "export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True",
         f"cd {musubi_path}",
         "",
         "# Activate venv if it exists",
