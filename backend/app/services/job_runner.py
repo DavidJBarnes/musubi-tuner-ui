@@ -329,9 +329,9 @@ def adopt_job(data) -> "Job":
             status="training",
             dataset_config="{}",
             training_args="{}",
-            log_file=data.log_file,
-            tensorboard_dir=data.tensorboard_dir,
-            output_dir=data.output_dir or None,
+            log_file=data.log_file.strip(),
+            tensorboard_dir=data.tensorboard_dir.strip(),
+            output_dir=data.output_dir.strip() or None,
             current_phase="training",
             started_at=datetime.now(timezone.utc),
         )
