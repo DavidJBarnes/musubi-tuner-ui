@@ -101,6 +101,13 @@ export function ConfigPage() {
     }
   }, [settings]);
 
+  // Auto-select first dataset if none selected
+  useEffect(() => {
+    if (!selectedDataset && datasets && datasets.length > 0) {
+      setSelectedDataset(datasets[0].name);
+    }
+  }, [datasets, selectedDataset]);
+
   // When dataset selection changes, auto-fill video/cache dirs
   useEffect(() => {
     if (selectedDataset && settings?.default_dataset_dir) {
@@ -258,7 +265,7 @@ export function ConfigPage() {
       )}
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-        <DatasetTomlForm config={datasetCfg} onChange={setDatasetCfg} />
+        <DatasetTomlForm config={datasetCfg} onChange={setDatasetCfg} datasetSelected={!!selectedDataset} />
         <TrainingArgsForm args={trainingArgs} onChange={setTrainingArgs} />
       </div>
 
