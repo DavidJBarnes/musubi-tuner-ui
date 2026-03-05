@@ -2,11 +2,12 @@ import type { VideoInfo } from "../../api/types";
 
 interface Props {
   video: VideoInfo;
+  datasetName: string;
   selected: boolean;
   onClick: () => void;
 }
 
-export function VideoCard({ video, selected, onClick }: Props) {
+export function VideoCard({ video, datasetName, selected, onClick }: Props) {
   return (
     <div
       onClick={onClick}
@@ -16,7 +17,7 @@ export function VideoCard({ video, selected, onClick }: Props) {
     >
       <div className="aspect-video bg-surface-3 relative">
         <img
-          src={`/api/datasets/videos/${encodeURIComponent(video.name)}/thumb`}
+          src={`/api/datasets/${encodeURIComponent(datasetName)}/videos/${encodeURIComponent(video.name)}/thumb`}
           alt={video.name}
           className="w-full h-full object-cover"
           loading="lazy"

@@ -22,6 +22,13 @@ export interface VideoInfo {
   size_bytes: number;
 }
 
+export interface DatasetInfo {
+  id: string;
+  name: string;
+  video_count: number;
+  created_at: string;
+}
+
 export interface PresetInfo {
   name: string;
   filename: string;
@@ -83,6 +90,8 @@ export interface Job {
   started_at: string | null;
   completed_at: string | null;
   error_message: string | null;
+  queue_position: number | null;
+  dataset_name: string | null;
 }
 
 export interface JobDetail extends Job {
@@ -104,4 +113,5 @@ export interface JobStats {
   current: number;
   total: number;
   save_every_n_epochs: number;
+  avr_loss: number | null;
 }

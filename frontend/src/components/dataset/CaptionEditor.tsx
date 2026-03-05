@@ -4,10 +4,11 @@ import type { VideoInfo } from "../../api/types";
 
 interface Props {
   video: VideoInfo;
+  datasetName: string;
   onSaved: () => void;
 }
 
-export function CaptionEditor({ video, onSaved }: Props) {
+export function CaptionEditor({ video, datasetName, onSaved }: Props) {
   const [caption, setCaption] = useState(video.caption);
   const [saving, setSaving] = useState(false);
 
@@ -18,7 +19,10 @@ export function CaptionEditor({ video, onSaved }: Props) {
   const save = async () => {
     setSaving(true);
     try {
-      await api.put(`/datasets/videos/${encodeURIComponent(video.name)}/caption`, { caption });
+      await api.put(
+        `/datasets/${encodeURIComponent(datasetName)}/videos/${encodeURIComponent(video.name)}/caption`,
+        { caption },
+      );
       onSaved();
     } finally {
       setSaving(false);
@@ -32,7 +36,7 @@ export function CaptionEditor({ video, onSaved }: Props) {
       </div>
       <div className="mb-3 aspect-video bg-surface-3 rounded overflow-hidden">
         <img
-          src={`/api/datasets/videos/${encodeURIComponent(video.name)}/thumb`}
+          src={`/api/datasets/${encodeURIComponent(datasetName)}/videos/${encodeURIComponent(video.name)}/thumb`}
           alt={video.name}
           className="w-full h-full object-cover"
         />

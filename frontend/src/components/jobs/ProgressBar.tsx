@@ -7,6 +7,7 @@ interface Props {
   epoch: number;
   totalEpochs: number;
   saveEveryNEpochs: number;
+  avrLoss?: number | null;
 }
 
 const PHASE_LABELS: Record<string, string> = {
@@ -16,8 +17,8 @@ const PHASE_LABELS: Record<string, string> = {
   done: "Done",
 };
 
-export function ProgressBar({ current, total, phase, status, speed, epoch, totalEpochs, saveEveryNEpochs }: Props) {
-  const pct = total > 0 ? Math.round((current / total) * 100) : 0;
+export function ProgressBar({ current, total, phase, status, speed, epoch, totalEpochs, saveEveryNEpochs, avrLoss }: Props) {
+  const pct = total > 0 ? Math.floor((current / total) * 100) : 0;
   const stepsPerEpoch = totalEpochs > 0 && total > 0 ? total / totalEpochs : 0;
 
   // Estimate time remaining
@@ -44,10 +45,15 @@ export function ProgressBar({ current, total, phase, status, speed, epoch, total
         </span>
       </div>
 
-      {/* Speed + ETA row */}
-      {speed != null && speed > 0 && (
+      {/* Speed + ETA + Loss row */}
+      {(speed != null && speed > 0 || avrLoss != null) && (
         <div className="flex justify-between items-center mb-2 text-xs text-text-dim">
-          <span>{speed.toFixed(1)}s/step</span>
+          <span>
+            {speed != null && speed > 0 && <>{speed.toFixed(1)}s/step</>}
+            {avrLoss != null && (
+              <span className="ml-3">avr_loss: {avrLoss.toFixed(4)}</span>
+            )}
+          </span>
           {remaining != null && <span>~{formatTime(remaining)} remaining</span>}
         </div>
       )}
