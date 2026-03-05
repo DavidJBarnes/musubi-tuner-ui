@@ -101,7 +101,7 @@ def generate_run_script(
         f"    --persistent_data_loader_workers \\",
         f"    --seed {training_args.seed} \\",
         f"    --output_dir {os.path.expanduser(training_args.output_dir)} \\",
-        f"    --output_name {training_args.output_name} \\",
+        f"    --output_name {training_args.output_name or job.name} \\",
         f"    --force_v2_1_time_embedding \\",
         f"    --log_with tensorboard \\",
         f"    --logging_dir {os.path.expanduser(training_args.logging_dir)}",
