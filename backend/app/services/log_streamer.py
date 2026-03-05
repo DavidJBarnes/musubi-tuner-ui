@@ -1,5 +1,6 @@
 import asyncio
 import os
+import re
 from collections.abc import AsyncGenerator
 
 
@@ -17,8 +18,10 @@ async def tail_log(log_path: str, poll_interval: float = 0.5) -> AsyncGenerator[
                     new_data = f.read()
                     if new_data:
                         offset = f.tell()
-                        for line in new_data.splitlines():
-                            yield line
+                        # tqdm uses \r to overwrite lines, split on both
+                        for line in re.split(r"[\r\n]+", new_data):
+                            if line:
+                                yield line
                     else:
                         await asyncio.sleep(poll_interval)
         except OSError:

@@ -303,7 +303,12 @@ def reconcile_jobs() -> None:
                     job.completed_at = datetime.now(timezone.utc)
                     job.pid = None
             else:
-                if job.status != "pending":
+                if job.status == "pending":
+                    pass  # Pending jobs without PID are fine
+                elif job.dataset_config == "{}":
+                    # Adopted job (no PID) — resume monitoring
+                    threading.Thread(target=_monitor_adopted_job, args=(job.id,), daemon=True).start()
+                else:
                     job.status = "failed"
                     job.error_message = "No PID recorded (backend restarted)"
                     job.completed_at = datetime.now(timezone.utc)
