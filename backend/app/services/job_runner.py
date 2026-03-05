@@ -30,9 +30,9 @@ def generate_run_script(
     comfyui_models_path: str,
 ) -> str:
     """Generate a bash script that runs the full training pipeline."""
-    vae = training_args.vae_path
-    t5 = training_args.t5_path
-    dit = training_args.dit_path
+    vae = os.path.expanduser(training_args.vae_path)
+    t5 = os.path.expanduser(training_args.t5_path)
+    dit = os.path.expanduser(training_args.dit_path)
     dataset_toml = Path(job.log_file).parent / f"{job.id}_dataset.toml" if job.log_file else "dataset.toml"
 
     lines = [
@@ -100,10 +100,11 @@ def generate_run_script(
         f"    --max_data_loader_n_workers 2 \\",
         f"    --persistent_data_loader_workers \\",
         f"    --seed {training_args.seed} \\",
-        f"    --output_dir {training_args.output_dir} \\",
+        f"    --output_dir {os.path.expanduser(training_args.output_dir)} \\",
         f"    --output_name {training_args.output_name} \\",
+        f"    --force_v2_1_time_embedding \\",
         f"    --log_with tensorboard \\",
-        f"    --logging_dir {training_args.logging_dir}",
+        f"    --logging_dir {os.path.expanduser(training_args.logging_dir)}",
         "",
         'echo "### PHASE: done ###"',
     ])
@@ -185,8 +186,8 @@ def start_job(job_id: str) -> None:
         job.pid = proc.pid
         job.status = "caching_latents"
         job.started_at = datetime.now(timezone.utc)
-        job.tensorboard_dir = training_args.logging_dir
-        job.output_dir = training_args.output_dir
+        job.tensorboard_dir = os.path.expanduser(training_args.logging_dir)
+        job.output_dir = os.path.expanduser(training_args.output_dir)
         db.commit()
 
         # Start background monitor thread
