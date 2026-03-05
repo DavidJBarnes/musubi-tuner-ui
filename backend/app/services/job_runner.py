@@ -126,8 +126,8 @@ def generate_dataset_toml(cfg: DatasetConfigForm) -> str:
         },
         "datasets": [
             {
-                "video_directory": cfg.video_directory,
-                "cache_directory": cfg.cache_directory,
+                "video_directory": os.path.expanduser(cfg.video_directory),
+                "cache_directory": os.path.expanduser(cfg.cache_directory),
                 "target_frames": cfg.target_frames,
                 "frame_extraction": cfg.frame_extraction,
                 "num_repeats": cfg.num_repeats,

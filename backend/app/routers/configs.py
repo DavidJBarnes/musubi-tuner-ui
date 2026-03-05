@@ -49,15 +49,21 @@ def validate_config(req: TomlGenerateRequest):
     cfg = req.dataset_config
     args = req.training_args
 
-    if not os.path.isdir(cfg.video_directory):
+    video_dir = os.path.expanduser(cfg.video_directory)
+    dit_path = os.path.expanduser(args.dit_path) if args.dit_path else ""
+    vae_path = os.path.expanduser(args.vae_path) if args.vae_path else ""
+    t5_path = os.path.expanduser(args.t5_path) if args.t5_path else ""
+    output_dir = os.path.expanduser(args.output_dir) if args.output_dir else ""
+
+    if not os.path.isdir(video_dir):
         errors.append(f"Video directory not found: {cfg.video_directory}")
-    if args.dit_path and not os.path.isfile(args.dit_path):
+    if dit_path and not os.path.isfile(dit_path):
         errors.append(f"DiT model not found: {args.dit_path}")
-    if args.vae_path and not os.path.isfile(args.vae_path):
+    if vae_path and not os.path.isfile(vae_path):
         errors.append(f"VAE model not found: {args.vae_path}")
-    if args.t5_path and not os.path.isfile(args.t5_path):
+    if t5_path and not os.path.isfile(t5_path):
         errors.append(f"T5 model not found: {args.t5_path}")
-    if args.output_dir and not os.path.isdir(os.path.dirname(args.output_dir)):
+    if output_dir and not os.path.isdir(os.path.dirname(output_dir)):
         errors.append(f"Output directory parent not found: {args.output_dir}")
 
     return {"valid": len(errors) == 0, "errors": errors}
