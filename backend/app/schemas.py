@@ -64,21 +64,21 @@ class TrainingArgsForm(BaseModel):
     # Timesteps
     timestep_sampling: str = "shift"
     discrete_flow_shift: float = 5.0
-    min_timestep: int = 0
+    min_timestep: int = 900
     max_timestep: int = 1000
     preserve_distribution_shape: bool = True
     # Optimizer
     optimizer_type: str = "adamw8bit"
     learning_rate: float = 2e-4
     lr_scheduler: str = "cosine"
-    max_train_epochs: int = 20
-    save_every_n_epochs: int = 2
+    max_train_epochs: int = 10
+    save_every_n_epochs: int = 1
     # Memory
     mixed_precision: str = "fp16"
     fp8_base: bool = True
     fp8_scaled: bool = True
     gradient_checkpointing: bool = True
-    blocks_to_swap: int = 20
+    blocks_to_swap: int = 36
     # Output
     output_dir: str = ""
     output_name: str = ""

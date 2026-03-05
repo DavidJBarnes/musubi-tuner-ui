@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import useSWR from "swr";
 import { api, fetcher } from "../../api/client";
-import type { DatasetConfig, PresetInfo, Settings, TrainingArgs } from "../../api/types";
+import type { DatasetConfig, Settings, TrainingArgs } from "../../api/types";
 import { DatasetTomlForm } from "./DatasetTomlForm";
 import { TrainingArgsForm } from "./TrainingArgsForm";
 
@@ -27,28 +27,41 @@ const DEFAULT_ARGS: TrainingArgs = {
   loraplus_lr_ratio: 4,
   timestep_sampling: "shift",
   discrete_flow_shift: 5.0,
-  min_timestep: 0,
+  min_timestep: 900,
   max_timestep: 1000,
   preserve_distribution_shape: true,
   optimizer_type: "adamw8bit",
   learning_rate: 2e-4,
   lr_scheduler: "cosine",
-  max_train_epochs: 20,
-  save_every_n_epochs: 2,
+  max_train_epochs: 10,
+  save_every_n_epochs: 1,
   mixed_precision: "fp16",
   fp8_base: true,
   fp8_scaled: true,
   gradient_checkpointing: true,
-  blocks_to_swap: 20,
+  blocks_to_swap: 36,
   output_dir: "",
   output_name: "",
   logging_dir: "",
   seed: 42,
 };
 
+// Settings driven by job type
+const JOB_TYPE_SETTINGS: Record<string, Partial<TrainingArgs>> = {
+  high_noise: {
+    min_timestep: 900,
+    max_timestep: 1000,
+    learning_rate: 2e-4,
+  },
+  low_noise: {
+    min_timestep: 0,
+    max_timestep: 900,
+    learning_rate: 1e-4,
+  },
+};
+
 export function ConfigPage() {
   const { data: settings } = useSWR<Settings>("/settings", fetcher);
-  const { data: presets } = useSWR<PresetInfo[]>("/configs/presets", fetcher);
   const [datasetCfg, setDatasetCfg] = useState<DatasetConfig>(DEFAULT_DATASET);
   const [trainingArgs, setTrainingArgs] = useState<TrainingArgs>(DEFAULT_ARGS);
   const [tomlPreview, setTomlPreview] = useState("");
@@ -72,7 +85,7 @@ export function ConfigPage() {
         setTrainingArgs((prev) => ({
           ...prev,
           vae_path: prev.vae_path || `${comfy}/diffusion_models/Wan2.1_VAE.pth`,
-          t5_path: prev.t5_path || `${comfy}/text_encoders/umt5_xxl_fp8_e4m3fn_scaled.safetensors`,
+          t5_path: prev.t5_path || `${comfy}/text_encoders/models_t5_umt5-xxl-enc-bf16.pth`,
           dit_path:
             prev.dit_path ||
             `${comfy}/diffusion_models/wan2.2_i2v_high_noise_14B_fp16.safetensors`,
@@ -86,18 +99,21 @@ export function ConfigPage() {
     }
   }, [settings]);
 
-  const loadPreset = async (filename: string) => {
-    const data = await api.get<{ training_args: Partial<TrainingArgs> }>(`/configs/presets/${filename}`);
-    setTrainingArgs((prev) => ({ ...prev, ...data.training_args }));
-    // Auto-set dit path based on preset
-    const comfy = settings?.comfyui_models_path;
-    if (comfy && data.training_args.min_timestep !== undefined) {
-      const isHigh = data.training_args.min_timestep >= 900;
-      setTrainingArgs((prev) => ({
-        ...prev,
-        dit_path: `${comfy}/diffusion_models/wan2.2_i2v_${isHigh ? "high" : "low"}_noise_14B_fp16.safetensors`,
-      }));
-      setJobType(isHigh ? "high_noise" : "low_noise");
+  // Update args when job type changes
+  const handleJobTypeChange = (newType: string) => {
+    setJobType(newType);
+    const overrides = JOB_TYPE_SETTINGS[newType];
+    if (overrides) {
+      setTrainingArgs((prev) => ({ ...prev, ...overrides }));
+      // Auto-switch DiT path
+      const comfy = settings?.comfyui_models_path;
+      if (comfy) {
+        const isHigh = newType === "high_noise";
+        setTrainingArgs((prev) => ({
+          ...prev,
+          dit_path: `${comfy}/diffusion_models/wan2.2_i2v_${isHigh ? "high" : "low"}_noise_14B_fp16.safetensors`,
+        }));
+      }
     }
   };
 
@@ -162,7 +178,7 @@ export function ConfigPage() {
             <label className="block text-xs text-text-dim mb-1">Job Type</label>
             <select
               value={jobType}
-              onChange={(e) => setJobType(e.target.value)}
+              onChange={(e) => handleJobTypeChange(e.target.value)}
               className="w-full bg-surface border border-border rounded px-3 py-1.5 text-sm text-text focus:outline-none focus:border-accent"
             >
               <option value="high_noise">High Noise (900-1000)</option>
@@ -208,23 +224,6 @@ export function ConfigPage() {
               <li key={i}>{e}</li>
             ))}
           </ul>
-        </div>
-      )}
-
-      {/* Preset buttons — inline above the forms */}
-      {presets && presets.length > 0 && (
-        <div className="mb-4 flex items-center gap-2">
-          <span className="text-xs text-text-dim">Quick fill:</span>
-          {presets.map((p) => (
-            <button
-              key={p.filename}
-              onClick={() => loadPreset(p.filename)}
-              className="px-3 py-1 text-xs bg-surface-2 border border-border rounded hover:border-accent/50 transition-colors"
-              title={p.description}
-            >
-              {p.name}
-            </button>
-          ))}
         </div>
       )}
 
