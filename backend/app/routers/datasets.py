@@ -41,11 +41,12 @@ def _count_videos(folder: Path) -> int:
 
 
 def _auto_discover(db: Session, base: Path) -> None:
-    """Register any on-disk subdirectories not already in DB."""
+    """Register any on-disk subdirectories that contain videos and aren't already in DB."""
     existing = {d.name for d in db.query(Dataset).all()}
     for entry in base.iterdir():
         if entry.is_dir() and not entry.name.startswith(".") and entry.name not in existing:
-            db.add(Dataset(name=entry.name))
+            if _count_videos(entry) > 0:
+                db.add(Dataset(name=entry.name))
     db.commit()
 
 
