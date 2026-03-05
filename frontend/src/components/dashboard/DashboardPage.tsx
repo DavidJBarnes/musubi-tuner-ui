@@ -65,7 +65,7 @@ export function DashboardPage() {
       )}
 
       {jobs.length === 0 && (
-        <p className="text-text-dim text-sm">No jobs yet. Create one from the Config page.</p>
+        <p className="text-text-dim text-sm">No jobs yet. <a href="/jobs/new" className="text-accent hover:underline">Create one</a>.</p>
       )}
     </div>
   );
