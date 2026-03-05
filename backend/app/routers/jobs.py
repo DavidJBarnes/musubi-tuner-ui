@@ -1,5 +1,6 @@
 import asyncio
 import json
+import os
 import threading
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -120,6 +121,49 @@ def get_job_stats(job_id: str, db: Session = Depends(get_db)):
         "total": progress.get("total", 0),
         "save_every_n_epochs": save_every,
     }
+
+
+@router.get("/{job_id}/checkpoints")
+def get_checkpoints(job_id: str, db: Session = Depends(get_db)):
+    """List saved checkpoint files for a job."""
+    import glob as g
+    job = db.query(Job).filter(Job.id == job_id).first()
+    if not job:
+        raise HTTPException(404, "Job not found")
+    if not job.output_dir:
+        return []
+
+    files = []
+    for pattern in ["*.safetensors", "*.pt", "*.pth"]:
+        files.extend(g.glob(os.path.join(job.output_dir, pattern)))
+    files.sort(key=lambda f: os.path.getmtime(f))
+
+    return [
+        {
+            "filename": os.path.basename(f),
+            "path": f,
+            "size_bytes": os.path.getsize(f),
+            "modified": os.path.getmtime(f),
+        }
+        for f in files
+    ]
+
+
+@router.get("/{job_id}/checkpoints/{filename}")
+def download_checkpoint(job_id: str, filename: str, db: Session = Depends(get_db)):
+    """Download a checkpoint file."""
+    from fastapi.responses import FileResponse
+    job = db.query(Job).filter(Job.id == job_id).first()
+    if not job or not job.output_dir:
+        raise HTTPException(404, "Job not found")
+
+    # Prevent path traversal
+    safe_name = os.path.basename(filename)
+    filepath = os.path.join(job.output_dir, safe_name)
+    if not os.path.isfile(filepath):
+        raise HTTPException(404, "Checkpoint not found")
+
+    return FileResponse(filepath, filename=safe_name, media_type="application/octet-stream")
 
 
 @router.get("/{job_id}/loss", response_model=list[LossPoint])

@@ -3,6 +3,7 @@ import useSWR from "swr";
 import { api, fetcher } from "../../api/client";
 import type { JobStats } from "../../api/types";
 import { useJob } from "../../hooks/useJobs";
+import { Checkpoints } from "./Checkpoints";
 import { LossChart } from "./LossChart";
 import { LogViewer } from "./LogViewer";
 import { ProgressBar } from "./ProgressBar";
@@ -59,7 +60,17 @@ export function JobDetailPage() {
           saveEveryNEpochs={stats?.save_every_n_epochs ?? 1}
         />
 
-        {id && <LogViewer jobId={id} />}
+        {/* Logs + Checkpoints side by side */}
+        {id && (
+          <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
+            <div className="lg:col-span-2">
+              <LogViewer jobId={id} />
+            </div>
+            <div>
+              <Checkpoints jobId={id} />
+            </div>
+          </div>
+        )}
 
         {(job.status === "training" || job.status === "completed") && id && (
           <LossChart jobId={id} />
