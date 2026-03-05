@@ -54,10 +54,19 @@ export function ProgressBar({ current, total, phase, status, speed, epoch, total
 
       {/* Progress bar with epoch ticks */}
       <div className="relative h-2 bg-surface rounded-full overflow-hidden">
-        <div
-          className="h-full bg-accent rounded-full transition-all duration-500"
-          style={{ width: `${pct}%` }}
-        />
+        {total > 0 ? (
+          <div
+            className="h-full bg-accent rounded-full transition-all duration-500"
+            style={{ width: `${pct}%` }}
+          />
+        ) : current > 0 ? (
+          <div className="h-full w-1/3 bg-accent/60 rounded-full animate-pulse" />
+        ) : (
+          <div
+            className="h-full bg-accent rounded-full transition-all duration-500"
+            style={{ width: "0%" }}
+          />
+        )}
         {/* Epoch tick marks — save epochs are highlighted */}
         {stepsPerEpoch > 0 && totalEpochs > 1 && (
           Array.from({ length: totalEpochs - 1 }, (_, i) => {
