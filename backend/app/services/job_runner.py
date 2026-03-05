@@ -224,7 +224,8 @@ def _is_training_process(pid: int) -> bool:
     """Check if a PID is still a training-related process (not a reused PID)."""
     try:
         cmdline = Path(f"/proc/{pid}/cmdline").read_bytes().decode("utf-8", errors="replace")
-        return "musubi" in cmdline or "wan_" in cmdline or "accelerate" in cmdline
+        # Match the training python processes OR the bash wrapper script
+        return "musubi" in cmdline or "wan_" in cmdline or "accelerate" in cmdline or "_run.sh" in cmdline
     except OSError:
         return False
 
