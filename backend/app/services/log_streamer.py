@@ -9,7 +9,14 @@ async def tail_log(log_path: str, poll_interval: float = 0.5) -> AsyncGenerator[
     while not os.path.exists(log_path):
         await asyncio.sleep(poll_interval)
 
-    offset = 0
+    # Start near the end of existing files to avoid flooding with history.
+    # Show last ~4KB of existing content, then follow new output.
+    try:
+        size = os.path.getsize(log_path)
+        offset = max(0, size - 4096)
+    except OSError:
+        offset = 0
+
     while True:
         try:
             async with asyncio.Lock():
