@@ -105,6 +105,14 @@ class JobCreate(BaseModel):
     training_args: TrainingArgsForm
 
 
+class JobAdopt(BaseModel):
+    name: str
+    job_type: str = "high_noise"
+    log_file: str
+    tensorboard_dir: str
+    output_dir: str = ""
+
+
 class JobRead(BaseModel):
     id: str
     name: str

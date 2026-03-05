@@ -312,6 +312,60 @@ def reconcile_jobs() -> None:
         db.close()
 
 
+def adopt_job(data) -> "Job":
+    """Adopt an externally-started job for monitoring (logs, loss, progress)."""
+    from ..schemas import JobAdopt
+
+    db = SessionLocal()
+    try:
+        job = Job(
+            name=data.name,
+            job_type=data.job_type,
+            status="training",
+            dataset_config="{}",
+            training_args="{}",
+            log_file=data.log_file,
+            tensorboard_dir=data.tensorboard_dir,
+            output_dir=data.output_dir or None,
+            current_phase="training",
+            started_at=datetime.now(timezone.utc),
+        )
+        db.add(job)
+        db.commit()
+        db.refresh(job)
+
+        # Start monitoring thread (no PID — just polls log for progress)
+        threading.Thread(target=_monitor_adopted_job, args=(job.id,), daemon=True).start()
+
+        return job
+    finally:
+        db.close()
+
+
+def _monitor_adopted_job(job_id: str) -> None:
+    """Monitor an adopted job by polling the log file for progress updates."""
+    while True:
+        time.sleep(5)
+        db = SessionLocal()
+        try:
+            job = db.query(Job).filter(Job.id == job_id).first()
+            if not job or job.status in ("completed", "failed", "cancelled"):
+                return
+
+            progress = parse_progress_from_log(job.log_file)
+            if progress["current"] > 0:
+                job.progress_current = progress["current"]
+                job.progress_total = progress["total"]
+            if progress["phase"]:
+                job.current_phase = progress["phase"]
+                if progress["phase"] == "done":
+                    job.status = "completed"
+                    job.completed_at = datetime.now(timezone.utc)
+            db.commit()
+        finally:
+            db.close()
+
+
 def has_running_job() -> bool:
     """Check if there's already a job running (max 1 concurrent)."""
     db = SessionLocal()

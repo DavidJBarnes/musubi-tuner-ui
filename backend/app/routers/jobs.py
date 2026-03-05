@@ -8,8 +8,8 @@ from sqlalchemy.orm import Session
 
 from ..database import get_db
 from ..models import Job
-from ..schemas import JobCreate, JobDetail, JobRead, LossPoint
-from ..services.job_runner import cancel_job, has_running_job, start_job
+from ..schemas import JobAdopt, JobCreate, JobDetail, JobRead, LossPoint
+from ..services.job_runner import cancel_job, has_running_job, start_job, adopt_job
 from ..services.log_streamer import tail_log
 from ..services.tb_reader import read_loss_curve
 
@@ -40,6 +40,13 @@ def create_job(data: JobCreate, db: Session = Depends(get_db)):
     # Start job in background thread
     threading.Thread(target=start_job, args=(job.id,), daemon=True).start()
 
+    return job
+
+
+@router.post("/adopt", response_model=JobRead)
+def adopt_existing_job(data: JobAdopt, db: Session = Depends(get_db)):
+    """Adopt an externally-started training job for monitoring."""
+    job = adopt_job(data)
     return job
 
 

@@ -1,5 +1,7 @@
+import { useState } from "react";
 import { Link } from "react-router-dom";
 import { useJobs } from "../../hooks/useJobs";
+import { AdoptJobForm } from "./AdoptJobForm";
 
 const STATUS_COLORS: Record<string, string> = {
   pending: "bg-gray-500",
@@ -12,11 +14,26 @@ const STATUS_COLORS: Record<string, string> = {
 };
 
 export function JobsPage() {
-  const { jobs } = useJobs();
+  const { jobs, mutate } = useJobs();
+  const [showAdopt, setShowAdopt] = useState(false);
 
   return (
     <div>
-      <h2 className="text-xl font-bold mb-4">Jobs</h2>
+      <div className="flex justify-between items-center mb-4">
+        <h2 className="text-xl font-bold">Jobs</h2>
+        <button
+          onClick={() => setShowAdopt(!showAdopt)}
+          className="px-3 py-1.5 text-sm border border-border rounded hover:bg-surface-2 transition-colors"
+        >
+          {showAdopt ? "Close" : "Adopt Existing Job"}
+        </button>
+      </div>
+
+      {showAdopt && (
+        <div className="mb-4">
+          <AdoptJobForm onDone={() => { setShowAdopt(false); mutate(); }} />
+        </div>
+      )}
 
       {jobs.length === 0 ? (
         <p className="text-text-dim text-sm">No jobs yet.</p>
