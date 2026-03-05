@@ -1,8 +1,6 @@
-import { useState } from "react";
 import { Link } from "react-router-dom";
 import { api } from "../../api/client";
 import { useJobs } from "../../hooks/useJobs";
-import { AdoptJobForm } from "./AdoptJobForm";
 
 const STATUS_COLORS: Record<string, string> = {
   pending: "bg-gray-500",
@@ -19,7 +17,6 @@ const RUNNING_STATUSES = ["caching_latents", "caching_text", "training", "pendin
 
 export function JobsPage() {
   const { jobs, mutate } = useJobs();
-  const [showAdopt, setShowAdopt] = useState(false);
 
   const running = jobs.filter((j) => RUNNING_STATUSES.includes(j.status));
   const queued = jobs
@@ -38,19 +35,13 @@ export function JobsPage() {
     <div>
       <div className="flex justify-between items-center mb-4">
         <h2 className="text-xl font-bold">Jobs</h2>
-        <button
-          onClick={() => setShowAdopt(!showAdopt)}
-          className="px-3 py-1.5 text-sm border border-border rounded hover:bg-surface-2 transition-colors"
+        <Link
+          to="/jobs/new"
+          className="px-3 py-1.5 text-sm bg-accent text-white rounded hover:bg-accent-hover transition-colors"
         >
-          {showAdopt ? "Close" : "Adopt Existing Job"}
-        </button>
+          New Job
+        </Link>
       </div>
-
-      {showAdopt && (
-        <div className="mb-4">
-          <AdoptJobForm onDone={() => { setShowAdopt(false); mutate(); }} />
-        </div>
-      )}
 
       {/* Running */}
       {running.length > 0 && (
@@ -114,7 +105,7 @@ export function JobsPage() {
       )}
 
       {jobs.length === 0 && (
-        <p className="text-text-dim text-sm">No jobs yet.</p>
+        <p className="text-text-dim text-sm">No jobs yet. <Link to="/jobs/new" className="text-accent hover:underline">Create one</Link>.</p>
       )}
     </div>
   );

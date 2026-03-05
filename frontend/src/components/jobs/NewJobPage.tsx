@@ -1,10 +1,11 @@
 import { useEffect, useState } from "react";
+import { useNavigate } from "react-router-dom";
 import useSWR from "swr";
 import { api, fetcher } from "../../api/client";
-import type { DatasetConfig, DatasetInfo, Settings, TrainingArgs } from "../../api/types";
+import type { DatasetConfig, DatasetInfo, Job, Settings, TrainingArgs } from "../../api/types";
 import { useJobs } from "../../hooks/useJobs";
-import { DatasetTomlForm } from "./DatasetTomlForm";
-import { TrainingArgsForm } from "./TrainingArgsForm";
+import { DatasetTomlForm } from "../config/DatasetTomlForm";
+import { TrainingArgsForm } from "../config/TrainingArgsForm";
 
 const DEFAULT_DATASET: DatasetConfig = {
   video_directory: "",
@@ -47,7 +48,6 @@ const DEFAULT_ARGS: TrainingArgs = {
   seed: 42,
 };
 
-// Settings driven by job type
 const JOB_TYPE_SETTINGS: Record<string, Partial<TrainingArgs>> = {
   high_noise: {
     min_timestep: 900,
@@ -63,7 +63,8 @@ const JOB_TYPE_SETTINGS: Record<string, Partial<TrainingArgs>> = {
 
 const ACTIVE_STATUSES = ["caching_latents", "caching_text", "training"];
 
-export function ConfigPage() {
+export function NewJobPage() {
+  const navigate = useNavigate();
   const { data: settings } = useSWR<Settings>("/settings", fetcher);
   const { data: datasets } = useSWR<DatasetInfo[]>("/datasets", fetcher);
   const { jobs } = useJobs();
@@ -75,7 +76,7 @@ export function ConfigPage() {
   const [jobType, setJobType] = useState("high_noise");
   const [selectedDataset, setSelectedDataset] = useState("");
   const [submitting, setSubmitting] = useState(false);
-  const [submitResult, setSubmitResult] = useState<string | null>(null);
+  const [submitError, setSubmitError] = useState<string | null>(null);
 
   const hasRunningJob = jobs.some((j) => ACTIVE_STATUSES.includes(j.status));
 
@@ -120,13 +121,11 @@ export function ConfigPage() {
     }
   }, [selectedDataset, settings]);
 
-  // Update args when job type changes
   const handleJobTypeChange = (newType: string) => {
     setJobType(newType);
     const overrides = JOB_TYPE_SETTINGS[newType];
     if (overrides) {
       setTrainingArgs((prev) => ({ ...prev, ...overrides }));
-      // Auto-switch DiT path
       const comfy = settings?.comfyui_models_path;
       if (comfy) {
         const isHigh = newType === "high_noise";
@@ -157,23 +156,23 @@ export function ConfigPage() {
 
   const createJob = async () => {
     setSubmitting(true);
-    setSubmitResult(null);
+    setSubmitError(null);
     try {
       const valid = await validate();
       if (!valid) {
         setSubmitting(false);
         return;
       }
-      await api.post("/jobs", {
+      const job = await api.post<Job>("/jobs", {
         name: jobName || `${jobType} training`,
         job_type: jobType,
         dataset_config: datasetCfg,
         training_args: trainingArgs,
         dataset_name: selectedDataset || null,
       });
-      setSubmitResult(hasRunningJob ? "Job added to queue!" : "Job created and started!");
+      navigate(`/jobs/${job.id}`);
     } catch (e: unknown) {
-      setSubmitResult(`Error: ${e instanceof Error ? e.message : String(e)}`);
+      setSubmitError(e instanceof Error ? e.message : String(e));
     } finally {
       setSubmitting(false);
     }
@@ -181,11 +180,9 @@ export function ConfigPage() {
 
   return (
     <div>
-      <h2 className="text-xl font-bold mb-4">Training Config</h2>
+      <h2 className="text-xl font-bold mb-4">New Job</h2>
 
-      {/* Job creation — top of page */}
       <div className="mb-6 bg-surface-2 rounded-lg border border-border p-4">
-        <h3 className="font-medium text-sm mb-3">Create Job</h3>
         <div className="grid grid-cols-1 sm:grid-cols-4 gap-3 mb-3">
           <div>
             <label className="block text-xs text-text-dim mb-1">Job Name</label>
@@ -245,10 +242,8 @@ export function ConfigPage() {
         >
           {submitting ? "Submitting..." : hasRunningJob ? "Add to Queue" : "Create & Start Job"}
         </button>
-        {submitResult && (
-          <p className={`mt-2 text-sm ${submitResult.startsWith("Error") ? "text-error" : "text-success"}`}>
-            {submitResult}
-          </p>
+        {submitError && (
+          <p className="mt-2 text-sm text-error">{submitError}</p>
         )}
       </div>
 
