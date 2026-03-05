@@ -2,6 +2,7 @@ import asyncio
 import json
 import os
 import threading
+from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import StreamingResponse
@@ -104,8 +105,9 @@ def get_job_stats(job_id: str, db: Session = Depends(get_db)):
         raise HTTPException(404, "Job not found")
     progress = parse_progress_from_log(job.log_file)
 
-    # Try to get save_every_n_epochs from training_args
+    # Try to get save_every_n_epochs and video count from config
     save_every = 1
+    video_count = 0
     try:
         import json
         args = json.loads(job.training_args)
@@ -113,12 +115,27 @@ def get_job_stats(job_id: str, db: Session = Depends(get_db)):
     except (json.JSONDecodeError, TypeError):
         pass
 
+    # When total is unknown (caching phases), count videos in dataset dir
+    total = progress.get("total", 0)
+    if total == 0 and job.status in ("caching_latents", "caching_text"):
+        try:
+            import tomli
+            toml_path = Path(job.log_file).parent / f"{job.id}_dataset.toml"
+            if toml_path.exists():
+                cfg = tomli.loads(toml_path.read_text())
+                video_dir = cfg.get("datasets", [{}])[0].get("video_directory", "")
+                if video_dir:
+                    from .datasets import VIDEO_EXTS
+                    total = sum(1 for f in Path(video_dir).iterdir() if f.suffix.lower() in VIDEO_EXTS)
+        except Exception:
+            pass
+
     return {
         "speed": progress.get("speed"),
         "epoch": progress.get("epoch", 0),
         "total_epochs": progress.get("total_epochs", 0),
         "current": progress.get("current", 0),
-        "total": progress.get("total", 0),
+        "total": total,
         "save_every_n_epochs": save_every,
     }
 
