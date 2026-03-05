@@ -14,15 +14,16 @@ def parse_progress_from_log(log_path: str) -> dict:
 
     try:
         with open(log_path, "rb") as f:
-            # Read last 8KB for efficiency
+            # Read last 32KB — tqdm uses \r so lines can be very long
             f.seek(0, 2)
             size = f.tell()
-            f.seek(max(0, size - 8192))
+            f.seek(max(0, size - 32768))
             tail = f.read().decode("utf-8", errors="replace")
     except OSError:
         return {"current": 0, "total": 0, "phase": None}
 
-    lines = tail.split("\n")
+    # tqdm overwrites with \r, so split on both \n and \r
+    lines = re.split(r"[\r\n]+", tail)
 
     phase = None
     current = 0
