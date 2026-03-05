@@ -1,5 +1,7 @@
 import { useParams } from "react-router-dom";
-import { api } from "../../api/client";
+import useSWR from "swr";
+import { api, fetcher } from "../../api/client";
+import type { JobStats } from "../../api/types";
 import { useJob } from "../../hooks/useJobs";
 import { LossChart } from "./LossChart";
 import { LogViewer } from "./LogViewer";
@@ -10,6 +12,11 @@ const ACTIVE = ["caching_latents", "caching_text", "training", "pending"];
 export function JobDetailPage() {
   const { id } = useParams<{ id: string }>();
   const { job, mutate } = useJob(id);
+  const { data: stats } = useSWR<JobStats>(
+    id ? `/jobs/${id}/stats` : null,
+    fetcher,
+    { refreshInterval: 5000 },
+  );
 
   if (!job) return <p className="text-text-dim">Loading...</p>;
 
@@ -42,10 +49,14 @@ export function JobDetailPage() {
 
       <div className="space-y-4">
         <ProgressBar
-          current={job.progress_current}
-          total={job.progress_total}
+          current={stats?.current ?? job.progress_current}
+          total={stats?.total ?? job.progress_total}
           phase={job.current_phase}
           status={job.status}
+          speed={stats?.speed ?? null}
+          epoch={stats?.epoch ?? 0}
+          totalEpochs={stats?.total_epochs ?? 0}
+          saveEveryNEpochs={stats?.save_every_n_epochs ?? 1}
         />
 
         {id && <LogViewer jobId={id} />}

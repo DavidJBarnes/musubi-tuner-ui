@@ -96,3 +96,12 @@ export interface LossPoint {
   step: number;
   value: number;
 }
+
+export interface JobStats {
+  speed: number | null;
+  epoch: number;
+  total_epochs: number;
+  current: number;
+  total: number;
+  save_every_n_epochs: number;
+}

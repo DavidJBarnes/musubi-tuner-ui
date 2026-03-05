@@ -10,6 +10,7 @@ from ..database import get_db
 from ..models import Job
 from ..schemas import JobAdopt, JobCreate, JobDetail, JobRead, LossPoint
 from ..services.job_runner import cancel_job, has_running_job, start_job, adopt_job
+from ..services.progress import parse_progress_from_log
 from ..services.log_streamer import tail_log
 from ..services.tb_reader import read_loss_curve
 
@@ -92,6 +93,33 @@ async def stream_logs(job_id: str, db: Session = Depends(get_db)):
                 return
 
     return StreamingResponse(event_generator(), media_type="text/event-stream")
+
+
+@router.get("/{job_id}/stats")
+def get_job_stats(job_id: str, db: Session = Depends(get_db)):
+    """Get live training stats parsed from log file."""
+    job = db.query(Job).filter(Job.id == job_id).first()
+    if not job:
+        raise HTTPException(404, "Job not found")
+    progress = parse_progress_from_log(job.log_file)
+
+    # Try to get save_every_n_epochs from training_args
+    save_every = 1
+    try:
+        import json
+        args = json.loads(job.training_args)
+        save_every = args.get("save_every_n_epochs", 1)
+    except (json.JSONDecodeError, TypeError):
+        pass
+
+    return {
+        "speed": progress.get("speed"),
+        "epoch": progress.get("epoch", 0),
+        "total_epochs": progress.get("total_epochs", 0),
+        "current": progress.get("current", 0),
+        "total": progress.get("total", 0),
+        "save_every_n_epochs": save_every,
+    }
 
 
 @router.get("/{job_id}/loss", response_model=list[LossPoint])
