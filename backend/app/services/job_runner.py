@@ -165,7 +165,6 @@ def start_job(job_id: str) -> None:
         toml_path = config.log_dir / f"{job.id}_dataset.toml"
         toml_content = generate_dataset_toml(dataset_cfg)
         toml_path.write_text(toml_content)
-        job.dataset_config = toml_content  # Snapshot the actual TOML
 
         # Generate and write run script
         script_content = generate_run_script(job, dataset_cfg, training_args, musubi_path, comfyui_models_path)
