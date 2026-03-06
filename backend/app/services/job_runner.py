@@ -1,5 +1,6 @@
 import json
 import os
+import re
 import signal
 import stat
 import subprocess
@@ -258,12 +259,16 @@ def _monitor_job(job_id: str, pid: int) -> None:
 
                 if exit_code == 0 or _log_has_done_phase(job.log_file):
                     job.status = "completed"
+                    completed = True
                 else:
                     job.status = "failed"
                     job.error_message = _extract_error_from_log(job.log_file) or f"Process exited with code {exit_code}"
+                    completed = False
                 job.completed_at = datetime.now(timezone.utc)
                 job.pid = None
                 db.commit()
+                if completed:
+                    _rename_checkpoints(job_id)
                 _advance_queue()
                 return
 
@@ -274,6 +279,11 @@ def _monitor_job(job_id: str, pid: int) -> None:
                 if progress["phase"] == "done":
                     job.status = "completed"
                     job.completed_at = datetime.now(timezone.utc)
+                    job.pid = None
+                    db.commit()
+                    _rename_checkpoints(job_id)
+                    _advance_queue()
+                    return
                 elif progress["phase"] in ("caching_latents", "caching_text", "training"):
                     job.status = progress["phase"]
             job.progress_current = progress["current"]
@@ -318,6 +328,58 @@ def _extract_error_from_log(log_file: str | None) -> str | None:
 
 def _infer_exit_from_log(log_file: str | None) -> int:
     return 0 if _log_has_done_phase(log_file) else 1
+
+
+def _rename_checkpoints(job_id: str) -> None:
+    """Rename checkpoint files from musubi-tuner's default format to include epoch and step.
+
+    Renames: {name}-{epoch:06d}.safetensors → {name}-e{epoch:03d}-s{step}.safetensors
+    Also renames the final checkpoint: {name}.safetensors → {name}-e{max_epoch:03d}-s{total_steps}.safetensors
+    """
+    db = SessionLocal()
+    try:
+        job = db.query(Job).filter(Job.id == job_id).first()
+        if not job or not job.output_dir:
+            return
+
+        try:
+            args = json.loads(job.training_args)
+        except (json.JSONDecodeError, TypeError):
+            return
+
+        output_name = args.get("output_name") or job.name
+        max_epochs = args.get("max_train_epochs", 0)
+        total_steps = job.progress_total
+
+        if not max_epochs or not total_steps:
+            return
+
+        steps_per_epoch = total_steps // max_epochs
+        output_dir = Path(job.output_dir)
+
+        # Rename epoch checkpoints: {name}-000001.safetensors → {name}-e001-s17.safetensors
+        epoch_re = re.compile(re.escape(output_name) + r"-(\d{6})\.safetensors$")
+        for f in output_dir.iterdir():
+            m = epoch_re.match(f.name)
+            if m:
+                epoch = int(m.group(1))
+                step = epoch * steps_per_epoch
+                new_name = f"{output_name}-e{epoch:03d}-s{step}.safetensors"
+                new_path = output_dir / new_name
+                if not new_path.exists():
+                    f.rename(new_path)
+
+        # Rename final checkpoint: {name}.safetensors → {name}-e{max_epoch:03d}-s{total_steps}.safetensors
+        final = output_dir / f"{output_name}.safetensors"
+        if final.exists():
+            new_name = f"{output_name}-e{max_epochs:03d}-s{total_steps}.safetensors"
+            new_path = output_dir / new_name
+            if not new_path.exists():
+                final.rename(new_path)
+    except Exception:
+        pass  # Non-critical — don't fail the job
+    finally:
+        db.close()
 
 
 def cancel_job(job_id: str) -> bool:
