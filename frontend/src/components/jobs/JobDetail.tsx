@@ -3,6 +3,7 @@ import useSWR from "swr";
 import { api, fetcher } from "../../api/client";
 import type { JobStats } from "../../api/types";
 import { useJob } from "../../hooks/useJobs";
+import { formatDateTime, utcToLocal } from "../../utils/date";
 import { Checkpoints } from "./Checkpoints";
 import { LossChart } from "./LossChart";
 import { LogViewer } from "./LogViewer";
@@ -100,9 +101,19 @@ export function JobDetailPage() {
         )}
 
         <div className="bg-surface-2 rounded-lg border border-border p-4 text-xs text-text-dim space-y-1">
-          <p>Created: {new Date(job.created_at).toLocaleString()}</p>
-          {job.started_at && <p>Started: {new Date(job.started_at).toLocaleString()}</p>}
-          {job.completed_at && <p>Completed: {new Date(job.completed_at).toLocaleString()}</p>}
+          <p>Created: {formatDateTime(job.created_at)}</p>
+          {job.started_at && <p>Started: {formatDateTime(job.started_at)}</p>}
+          {job.completed_at && <p>Completed: {formatDateTime(job.completed_at)}</p>}
+          {job.started_at && (
+            <p>Duration: {(() => {
+              const start = utcToLocal(job.started_at).getTime();
+              const end = job.completed_at ? utcToLocal(job.completed_at).getTime() : Date.now();
+              const mins = Math.floor((end - start) / 60000);
+              const h = Math.floor(mins / 60);
+              const m = mins % 60;
+              return h > 0 ? `${h}h ${m}m` : `${m}m`;
+            })()}</p>
+          )}
           {job.output_dir && <p>Output: {job.output_dir}</p>}
         </div>
       </div>

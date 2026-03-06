@@ -1,6 +1,7 @@
 import { Link } from "react-router-dom";
 import { api } from "../../api/client";
 import { useJobs } from "../../hooks/useJobs";
+import { formatDate } from "../../utils/date";
 
 const STATUS_COLORS: Record<string, string> = {
   pending: "bg-gray-500",
@@ -125,7 +126,7 @@ function JobRow({ job }: { job: { id: string; name: string; status: string; job_
             <p className="text-xs text-text-dim">
               {job.job_type.replace(/_/g, " ")}
               {job.dataset_name && <> &middot; {job.dataset_name}</>}
-              {" "}&middot; {new Date(job.created_at).toLocaleDateString()}
+              {" "}&middot; {formatDate(job.created_at)}
             </p>
           </div>
         </div>
