@@ -3,6 +3,7 @@ import { Link } from "react-router-dom";
 import useSWR from "swr";
 import { api, fetcher } from "../../api/client";
 import type { DatasetInfo } from "../../api/types";
+import { formatDate } from "../../utils/date";
 
 export function DatasetListPage() {
   const { data: datasets, mutate } = useSWR<DatasetInfo[]>("/datasets", fetcher);
@@ -70,7 +71,7 @@ export function DatasetListPage() {
                 {ds.video_count} video{ds.video_count !== 1 ? "s" : ""}
               </p>
               <p className="text-[10px] text-text-dim mt-1">
-                {new Date(ds.created_at).toLocaleDateString()}
+                {formatDate(ds.created_at)}
               </p>
             </Link>
             <div className="border-t border-border px-4 py-2">
