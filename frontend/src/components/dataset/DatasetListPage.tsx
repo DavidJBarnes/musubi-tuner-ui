@@ -2,11 +2,12 @@ import { useState } from "react";
 import { Link } from "react-router-dom";
 import useSWR from "swr";
 import { api, fetcher } from "../../api/client";
-import type { DatasetInfo } from "../../api/types";
+import type { DatasetInfo, PaginatedResponse } from "../../api/types";
 import { formatDate } from "../../utils/date";
 
 export function DatasetListPage() {
-  const { data: datasets, mutate } = useSWR<DatasetInfo[]>("/datasets", fetcher);
+  const { data: datasetsResponse, mutate } = useSWR<PaginatedResponse<DatasetInfo>>("/datasets", fetcher);
+  const datasets = datasetsResponse?.items;
   const [newName, setNewName] = useState("");
   const [creating, setCreating] = useState(false);
 

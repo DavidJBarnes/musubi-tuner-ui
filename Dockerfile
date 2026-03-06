@@ -26,5 +26,12 @@ COPY backend/ ./
 # Copy built frontend into static dir served by FastAPI
 COPY --from=frontend-build /app/frontend/dist ./static
 
+# Create non-root user and ensure data dir is writable
+RUN useradd --create-home appuser && \
+    mkdir -p /app/backend/data && \
+    chown -R appuser:appuser /app
+
+USER appuser
+
 EXPOSE 8000
 CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]

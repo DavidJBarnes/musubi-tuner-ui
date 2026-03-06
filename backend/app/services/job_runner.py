@@ -1,4 +1,7 @@
+"""Training job lifecycle management: script generation, process spawning, monitoring, and queue."""
+
 import json
+import logging
 import os
 import re
 import signal
@@ -16,6 +19,8 @@ from ..database import SessionLocal
 from ..models import Job, Setting
 from ..schemas import DatasetConfigForm, TrainingArgsForm
 from .progress import parse_progress_from_log
+
+logger = logging.getLogger(__name__)
 
 
 def _get_setting(db: Session, key: str) -> str:
@@ -229,6 +234,7 @@ def start_job(job_id: str, skip_to_phase: str | None = None, resume_from: str | 
         threading.Thread(target=_monitor_job, args=(job_id, proc.pid), daemon=True).start()
 
     except Exception as e:
+        logger.exception("Failed to start job %s", job_id)
         job.status = "failed"
         job.error_message = str(e)
         db.commit()
@@ -402,7 +408,7 @@ def _rename_checkpoints(job_id: str, cleanup_state: bool = False) -> None:
                 if state_dir.is_dir():
                     shutil.rmtree(state_dir, ignore_errors=True)
     except Exception:
-        pass  # Non-critical — don't fail the job
+        logger.warning("Failed to rename checkpoints for job %s", job_id, exc_info=True)
     finally:
         db.close()
 
@@ -562,7 +568,7 @@ def reconcile_jobs() -> None:
         db.close()
 
 
-def adopt_job(data) -> "Job":
+def adopt_job(data: "JobAdopt") -> "Job":
     """Adopt an externally-started job for monitoring (logs, loss, progress)."""
     from ..schemas import JobAdopt
 

@@ -1,5 +1,10 @@
+"""Training progress parser for log files."""
+
+import logging
 import os
 import re
+
+logger = logging.getLogger(__name__)
 
 # Match tqdm output like: " 45%|████      | 9/20 [02:15<02:45, 15.00s/it]"
 TQDM_RE = re.compile(r"(\d+)%\|.*?\|\s*(\d+)/(\d+)")
@@ -15,7 +20,7 @@ PHASE_RE = re.compile(r"### PHASE:\s*(\S+)\s*###")
 EPOCH_RE = re.compile(r"epoch\s+(\d+)/(\d+)")
 
 
-def parse_progress_from_log(log_path: str) -> dict:
+def parse_progress_from_log(log_path: str | None) -> dict:
     """Read the tail of a log file and extract progress info."""
     if not log_path or not os.path.exists(log_path):
         return {"current": 0, "total": 0, "phase": None, "speed": None, "epoch": 0, "total_epochs": 0, "avr_loss": None}

@@ -1,5 +1,8 @@
+"""Job management API endpoints."""
+
 import asyncio
 import json
+import logging
 import os
 import threading
 from pathlib import Path
@@ -10,23 +13,28 @@ from sqlalchemy.orm import Session
 
 from ..database import get_db
 from ..models import Job
-from ..schemas import JobAdopt, JobCreate, JobDetail, JobRead, LossPoint
+from ..schemas import JobAdopt, JobCreate, JobDetail, JobRead, LossPoint, PaginatedResponse
 from ..services.job_runner import cancel_job, stop_job, resume_job, has_running_job, start_job, adopt_job, _assign_queue_position, _rename_checkpoints
 from ..services.progress import parse_progress_from_log
 from ..services.log_streamer import tail_log
 from ..services.tb_reader import read_loss_curve
 
-router = APIRouter(prefix="/jobs")
+logger = logging.getLogger(__name__)
+
+router = APIRouter(prefix="/jobs", tags=["jobs"])
 
 
-@router.get("", response_model=list[JobRead])
-def list_jobs(db: Session = Depends(get_db)):
-    jobs = db.query(Job).order_by(Job.created_at.desc()).all()
-    return jobs
+@router.get("", response_model=PaginatedResponse[JobRead])
+def list_jobs(skip: int = 0, limit: int = 100, db: Session = Depends(get_db)):
+    """List all jobs with pagination."""
+    total = db.query(Job).count()
+    jobs = db.query(Job).order_by(Job.created_at.desc()).offset(skip).limit(limit).all()
+    return PaginatedResponse(items=jobs, total=total, skip=skip, limit=limit)
 
 
-@router.post("", response_model=JobRead)
+@router.post("", response_model=JobRead, status_code=201)
 def create_job(data: JobCreate, db: Session = Depends(get_db)):
+    """Create a new training job."""
     running = has_running_job()
 
     job = Job(
@@ -50,18 +58,21 @@ def create_job(data: JobCreate, db: Session = Depends(get_db)):
     if not running:
         threading.Thread(target=start_job, args=(job.id,), daemon=True).start()
 
+    logger.info("Created job %s (%s)", job.name, job.status)
     return job
 
 
-@router.post("/adopt", response_model=JobRead)
+@router.post("/adopt", response_model=JobRead, status_code=201)
 def adopt_existing_job(data: JobAdopt, db: Session = Depends(get_db)):
     """Adopt an externally-started training job for monitoring."""
     job = adopt_job(data)
+    logger.info("Adopted external job %s", job.name)
     return job
 
 
 @router.get("/{job_id}", response_model=JobDetail)
 def get_job(job_id: str, db: Session = Depends(get_db)):
+    """Get detailed information about a specific job."""
     job = db.query(Job).filter(Job.id == job_id).first()
     if not job:
         raise HTTPException(404, "Job not found")
@@ -69,7 +80,8 @@ def get_job(job_id: str, db: Session = Depends(get_db)):
 
 
 @router.delete("/{job_id}")
-def delete_job(job_id: str, db: Session = Depends(get_db)):
+def delete_job(job_id: str, db: Session = Depends(get_db)) -> dict:
+    """Cancel and delete a job."""
     job = db.query(Job).filter(Job.id == job_id).first()
     if not job:
         raise HTTPException(404, "Job not found")
@@ -120,7 +132,7 @@ def retry_job(job_id: str, db: Session = Depends(get_db)):
 
 
 @router.post("/{job_id}/stop")
-def stop_job_endpoint(job_id: str, db: Session = Depends(get_db)):
+def stop_job_endpoint(job_id: str, db: Session = Depends(get_db)) -> dict:
     """Stop a running job (can be resumed later)."""
     job = db.query(Job).filter(Job.id == job_id).first()
     if not job:
@@ -147,6 +159,7 @@ def resume_job_endpoint(job_id: str, db: Session = Depends(get_db)):
 
 @router.get("/{job_id}/logs")
 async def stream_logs(job_id: str, db: Session = Depends(get_db)):
+    """Stream job logs via Server-Sent Events."""
     job = db.query(Job).filter(Job.id == job_id).first()
     if not job:
         raise HTTPException(404, "Job not found")
@@ -168,7 +181,7 @@ async def stream_logs(job_id: str, db: Session = Depends(get_db)):
 
 
 @router.get("/{job_id}/stats")
-def get_job_stats(job_id: str, db: Session = Depends(get_db)):
+def get_job_stats(job_id: str, db: Session = Depends(get_db)) -> dict:
     """Get live training stats parsed from log file."""
     job = db.query(Job).filter(Job.id == job_id).first()
     if not job:
@@ -212,7 +225,7 @@ def get_job_stats(job_id: str, db: Session = Depends(get_db)):
 
 
 @router.post("/{job_id}/rename-checkpoints")
-def rename_checkpoints(job_id: str, db: Session = Depends(get_db)):
+def rename_checkpoints(job_id: str, db: Session = Depends(get_db)) -> dict:
     """Rename checkpoint files to include epoch and step numbers."""
     job = db.query(Job).filter(Job.id == job_id).first()
     if not job:
@@ -222,7 +235,7 @@ def rename_checkpoints(job_id: str, db: Session = Depends(get_db)):
 
 
 @router.get("/{job_id}/checkpoints")
-def get_checkpoints(job_id: str, db: Session = Depends(get_db)):
+def get_checkpoints(job_id: str, db: Session = Depends(get_db)) -> list[dict]:
     """List saved checkpoint files for a job."""
     import glob as g
     job = db.query(Job).filter(Job.id == job_id).first()
@@ -282,6 +295,7 @@ def download_checkpoint(job_id: str, filename: str, db: Session = Depends(get_db
 
 @router.get("/{job_id}/loss", response_model=list[LossPoint])
 def get_loss_curve(job_id: str, db: Session = Depends(get_db)):
+    """Get loss curve data from TensorBoard logs."""
     job = db.query(Job).filter(Job.id == job_id).first()
     if not job:
         raise HTTPException(404, "Job not found")

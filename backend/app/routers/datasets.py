@@ -1,3 +1,6 @@
+"""Dataset management API endpoints."""
+
+import logging
 import os
 import subprocess
 from pathlib import Path
@@ -9,14 +12,17 @@ from sqlalchemy.orm import Session
 
 from ..database import get_db
 from ..models import Dataset, Setting
-from ..schemas import DatasetCreate, DatasetInfo, VideoInfo
+from ..schemas import DatasetCreate, DatasetInfo, PaginatedResponse, VideoInfo
 
-router = APIRouter(prefix="/datasets")
+logger = logging.getLogger(__name__)
+
+router = APIRouter(prefix="/datasets", tags=["datasets"])
 
 VIDEO_EXTS = {".mp4", ".webm", ".mkv", ".avi", ".mov"}
 
 
 def _get_base_dir(db: Session) -> Path:
+    """Get the configured dataset base directory."""
     s = db.query(Setting).filter(Setting.key == "default_dataset_dir").first()
     if not s or not s.value:
         raise HTTPException(400, "default_dataset_dir not configured")
@@ -27,6 +33,7 @@ def _get_base_dir(db: Session) -> Path:
 
 
 def _get_dataset_dir(db: Session, name: str) -> Path:
+    """Get the directory for a specific dataset by name."""
     base = _get_base_dir(db)
     d = base / name
     if not d.is_dir():
@@ -35,6 +42,7 @@ def _get_dataset_dir(db: Session, name: str) -> Path:
 
 
 def _count_videos(folder: Path) -> int:
+    """Count video files in a directory."""
     if not folder.is_dir():
         return 0
     return sum(1 for f in folder.iterdir() if f.suffix.lower() in VIDEO_EXTS and f.is_file())
@@ -52,25 +60,28 @@ def _auto_discover(db: Session, base: Path) -> None:
 
 # --- Dataset CRUD ---
 
-@router.get("", response_model=list[DatasetInfo])
-def list_datasets(db: Session = Depends(get_db)):
+@router.get("", response_model=PaginatedResponse[DatasetInfo])
+def list_datasets(skip: int = 0, limit: int = 100, db: Session = Depends(get_db)):
+    """List all datasets with pagination."""
     base = _get_base_dir(db)
     _auto_discover(db, base)
-    datasets = db.query(Dataset).order_by(Dataset.name).all()
-    result = []
+    total = db.query(Dataset).count()
+    datasets = db.query(Dataset).order_by(Dataset.name).offset(skip).limit(limit).all()
+    items = []
     for ds in datasets:
         folder = base / ds.name
-        result.append(DatasetInfo(
+        items.append(DatasetInfo(
             id=ds.id,
             name=ds.name,
             video_count=_count_videos(folder),
             created_at=ds.created_at,
         ))
-    return result
+    return PaginatedResponse(items=items, total=total, skip=skip, limit=limit)
 
 
-@router.post("", response_model=DatasetInfo)
+@router.post("", response_model=DatasetInfo, status_code=201)
 def create_dataset(data: DatasetCreate, db: Session = Depends(get_db)):
+    """Create a new dataset directory."""
     base = _get_base_dir(db)
     if db.query(Dataset).filter(Dataset.name == data.name).first():
         raise HTTPException(409, f"Dataset '{data.name}' already exists")
@@ -80,6 +91,7 @@ def create_dataset(data: DatasetCreate, db: Session = Depends(get_db)):
     db.add(ds)
     db.commit()
     db.refresh(ds)
+    logger.info("Created dataset %s", data.name)
     return DatasetInfo(
         id=ds.id,
         name=ds.name,
@@ -89,7 +101,8 @@ def create_dataset(data: DatasetCreate, db: Session = Depends(get_db)):
 
 
 @router.delete("/{name}")
-def delete_dataset(name: str, db: Session = Depends(get_db)):
+def delete_dataset(name: str, db: Session = Depends(get_db)) -> dict:
+    """Remove a dataset from the database (files are not deleted)."""
     ds = db.query(Dataset).filter(Dataset.name == name).first()
     if not ds:
         raise HTTPException(404, "Dataset not found")
@@ -100,28 +113,32 @@ def delete_dataset(name: str, db: Session = Depends(get_db)):
 
 # --- Videos within a dataset ---
 
-@router.get("/{name}/videos", response_model=list[VideoInfo])
-def list_videos(name: str, db: Session = Depends(get_db)):
+@router.get("/{name}/videos", response_model=PaginatedResponse[VideoInfo])
+def list_videos(name: str, skip: int = 0, limit: int = 100, db: Session = Depends(get_db)):
+    """List videos in a dataset with pagination."""
     dataset_dir = _get_dataset_dir(db, name)
-    videos = []
+    all_videos = []
     for f in sorted(dataset_dir.iterdir()):
         if f.suffix.lower() in VIDEO_EXTS and f.is_file():
             stem = f.stem
             caption_file = f.with_suffix(".txt")
             has_caption = caption_file.exists()
             caption = caption_file.read_text().strip() if has_caption else ""
-            videos.append(VideoInfo(
+            all_videos.append(VideoInfo(
                 name=stem,
                 filename=f.name,
                 caption=caption,
                 has_caption=has_caption,
                 size_bytes=f.stat().st_size,
             ))
-    return videos
+    total = len(all_videos)
+    items = all_videos[skip:skip + limit]
+    return PaginatedResponse(items=items, total=total, skip=skip, limit=limit)
 
 
 @router.get("/{name}/videos/{video}/thumb")
 def get_thumbnail(name: str, video: str, db: Session = Depends(get_db)):
+    """Generate and serve a thumbnail for a video."""
     dataset_dir = _get_dataset_dir(db, name)
     video_file = _find_video(dataset_dir, video)
     if not video_file:
@@ -152,7 +169,8 @@ def get_thumbnail(name: str, video: str, db: Session = Depends(get_db)):
 
 
 @router.get("/{name}/videos/{video}/caption")
-def read_caption(name: str, video: str, db: Session = Depends(get_db)):
+def read_caption(name: str, video: str, db: Session = Depends(get_db)) -> dict:
+    """Read the caption for a video."""
     dataset_dir = _get_dataset_dir(db, name)
     caption_file = _find_caption_path(dataset_dir, video)
     caption = caption_file.read_text().strip() if caption_file.exists() else ""
@@ -160,7 +178,8 @@ def read_caption(name: str, video: str, db: Session = Depends(get_db)):
 
 
 @router.put("/{name}/videos/{video}/caption")
-def write_caption(name: str, video: str, body: dict, db: Session = Depends(get_db)):
+def write_caption(name: str, video: str, body: dict, db: Session = Depends(get_db)) -> dict:
+    """Update the caption for a video."""
     dataset_dir = _get_dataset_dir(db, name)
     caption = body.get("caption", "")
     video_file = _find_video(dataset_dir, video)
@@ -172,7 +191,8 @@ def write_caption(name: str, video: str, body: dict, db: Session = Depends(get_d
 
 
 @router.post("/{name}/videos/upload")
-async def upload_videos(name: str, files: list[UploadFile], db: Session = Depends(get_db)):
+async def upload_videos(name: str, files: list[UploadFile], db: Session = Depends(get_db)) -> dict:
+    """Upload video files to a dataset."""
     dataset_dir = _get_dataset_dir(db, name)
     uploaded = []
     for file in files:
@@ -186,7 +206,8 @@ async def upload_videos(name: str, files: list[UploadFile], db: Session = Depend
 
 
 @router.delete("/{name}/videos/{video}")
-def delete_video(name: str, video: str, db: Session = Depends(get_db)):
+def delete_video(name: str, video: str, db: Session = Depends(get_db)) -> dict:
+    """Delete a video and its caption from a dataset."""
     dataset_dir = _get_dataset_dir(db, name)
     video_file = _find_video(dataset_dir, video)
     if not video_file:
@@ -204,6 +225,7 @@ def delete_video(name: str, video: str, db: Session = Depends(get_db)):
 
 
 def _find_video(dataset_dir: Path, name: str) -> Path | None:
+    """Find a video file by stem name across supported extensions."""
     for ext in VIDEO_EXTS:
         p = dataset_dir / f"{name}{ext}"
         if p.exists():
@@ -212,6 +234,7 @@ def _find_video(dataset_dir: Path, name: str) -> Path | None:
 
 
 def _find_caption_path(dataset_dir: Path, name: str) -> Path:
+    """Find the caption file path for a video."""
     video = _find_video(dataset_dir, name)
     if video:
         return video.with_suffix(".txt")

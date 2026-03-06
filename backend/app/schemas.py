@@ -1,7 +1,21 @@
+"""Pydantic schemas for API request and response models."""
+
 import re
 from datetime import datetime
+from typing import Generic, TypeVar
 
 from pydantic import BaseModel, field_validator
+
+T = TypeVar("T")
+
+
+class PaginatedResponse(BaseModel, Generic[T]):
+    """Wrapper for paginated list responses."""
+
+    items: list[T]
+    total: int
+    skip: int
+    limit: int
 
 
 # --- Settings ---

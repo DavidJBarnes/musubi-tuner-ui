@@ -1,3 +1,5 @@
+"""SQLAlchemy ORM models for jobs, datasets, and settings."""
+
 import uuid
 from datetime import datetime, timezone
 

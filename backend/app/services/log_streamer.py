@@ -1,3 +1,5 @@
+"""Async log file streaming (tail -f equivalent)."""
+
 import asyncio
 import os
 import re
