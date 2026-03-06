@@ -202,7 +202,6 @@ export function NewJobPage() {
             >
               <option value="high_noise">High Noise (900-1000)</option>
               <option value="low_noise">Low Noise (0-900)</option>
-              <option value="both">Both (sequential)</option>
             </select>
           </div>
           <div>
