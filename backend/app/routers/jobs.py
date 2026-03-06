@@ -205,6 +205,9 @@ def get_checkpoints(job_id: str, db: Session = Depends(get_db)):
     if not job.output_dir:
         return []
 
+    # Eagerly rename any new checkpoints to friendly format
+    _rename_checkpoints(job_id)
+
     # Get output_name prefix to filter checkpoints belonging to this job
     output_name = None
     try:
