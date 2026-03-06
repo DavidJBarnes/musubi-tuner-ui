@@ -126,3 +126,11 @@ frontend/
 - **Real-time updates**: SSE for log streaming, SWR for automatic data refresh
 - **GPU monitoring**: nvidia-smi polling
 - **Loss curves**: TensorBoard event file reader (via Recharts)
+
+## Stop & Resume Jobs
+
+Training jobs can be **stopped** and **resumed** without losing progress.
+
+- **Stop** sends SIGTERM and sets the job to `stopped`. The GPU is freed and the queue advances. This is different from **Cancel**, which permanently ends the job (only retry from scratch).
+- **Resume** picks up from the last saved training state directory. musubi-tuner saves full optimizer state, LR scheduler, and step counter, so training continues exactly where it left off. If no state directory is found, it falls back to `--network_weights` with the latest checkpoint (loses optimizer state but keeps weights).
+- During training, only the latest state directory is kept on disk (`--save_last_n_epochs_state 1`, ~500MB). When a job completes successfully, state directories are automatically deleted.
