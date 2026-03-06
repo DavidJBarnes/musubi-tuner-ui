@@ -195,9 +195,22 @@ def get_checkpoints(job_id: str, db: Session = Depends(get_db)):
     if not job.output_dir:
         return []
 
+    # Get output_name prefix to filter checkpoints belonging to this job
+    output_name = None
+    try:
+        args = json.loads(job.training_args)
+        output_name = args.get("output_name") or job.name
+    except (json.JSONDecodeError, TypeError):
+        output_name = job.name
+
     files = []
     for pattern in ["*.safetensors", "*.pt", "*.pth"]:
         files.extend(g.glob(os.path.join(job.output_dir, pattern)))
+
+    # Filter to only this job's checkpoints
+    if output_name:
+        files = [f for f in files if os.path.basename(f).startswith(output_name)]
+
     files.sort(key=lambda f: os.path.getmtime(f))
 
     return [
