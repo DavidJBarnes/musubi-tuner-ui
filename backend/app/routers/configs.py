@@ -1,3 +1,5 @@
+"""Training configuration and preset API endpoints."""
+
 import json
 import os
 from pathlib import Path
@@ -7,13 +9,14 @@ from fastapi import APIRouter, HTTPException
 from ..schemas import DatasetConfigForm, PresetInfo, TomlGenerateRequest, TrainingArgsForm
 from ..services.job_runner import generate_dataset_toml
 
-router = APIRouter(prefix="/configs")
+router = APIRouter(prefix="/configs", tags=["configs"])
 
 PRESETS_DIR = Path(__file__).resolve().parent.parent / "presets"
 
 
 @router.get("/presets", response_model=list[PresetInfo])
-def list_presets():
+def list_presets() -> list[PresetInfo]:
+    """List available training presets."""
     presets = []
     if PRESETS_DIR.is_dir():
         for f in sorted(PRESETS_DIR.glob("*.json")):
@@ -30,7 +33,8 @@ def list_presets():
 
 
 @router.get("/presets/{filename}")
-def get_preset(filename: str):
+def get_preset(filename: str) -> dict:
+    """Get a specific preset by filename."""
     preset_path = PRESETS_DIR / filename
     if not preset_path.exists() or not preset_path.suffix == ".json":
         raise HTTPException(404, "Preset not found")
@@ -38,13 +42,15 @@ def get_preset(filename: str):
 
 
 @router.post("/generate-toml")
-def generate_toml(req: TomlGenerateRequest):
+def generate_toml(req: TomlGenerateRequest) -> dict:
+    """Generate dataset TOML from form data."""
     toml_content = generate_dataset_toml(req.dataset_config)
     return {"toml": toml_content}
 
 
 @router.post("/validate")
-def validate_config(req: TomlGenerateRequest):
+def validate_config(req: TomlGenerateRequest) -> dict:
+    """Validate that model and data paths exist on disk."""
     errors = []
     cfg = req.dataset_config
     args = req.training_args

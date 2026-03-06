@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import useSWR from "swr";
 import { api, fetcher } from "../../api/client";
-import type { DatasetConfig, DatasetInfo, Job, Settings, TrainingArgs } from "../../api/types";
+import type { DatasetConfig, DatasetInfo, Job, PaginatedResponse, Settings, TrainingArgs } from "../../api/types";
 import { useJobs } from "../../hooks/useJobs";
 import { DatasetTomlForm } from "../config/DatasetTomlForm";
 import { TrainingArgsForm } from "../config/TrainingArgsForm";
@@ -66,7 +66,8 @@ const ACTIVE_STATUSES = ["caching_latents", "caching_text", "training"];
 export function NewJobPage() {
   const navigate = useNavigate();
   const { data: settings } = useSWR<Settings>("/settings", fetcher);
-  const { data: datasets } = useSWR<DatasetInfo[]>("/datasets", fetcher);
+  const { data: datasetsResponse } = useSWR<PaginatedResponse<DatasetInfo>>("/datasets", fetcher);
+  const datasets = datasetsResponse?.items;
   const { jobs } = useJobs();
   const [datasetCfg, setDatasetCfg] = useState<DatasetConfig>(DEFAULT_DATASET);
   const [trainingArgs, setTrainingArgs] = useState<TrainingArgs>(DEFAULT_ARGS);

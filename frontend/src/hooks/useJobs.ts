@@ -1,12 +1,12 @@
 import useSWR from "swr";
 import { fetcher } from "../api/client";
-import type { Job, JobDetail } from "../api/types";
+import type { Job, JobDetail, PaginatedResponse } from "../api/types";
 
 export function useJobs() {
-  const { data, error, mutate } = useSWR<Job[]>("/jobs", fetcher, {
+  const { data, error, mutate } = useSWR<PaginatedResponse<Job>>("/jobs", fetcher, {
     refreshInterval: 5000,
   });
-  return { jobs: data ?? [], error, mutate };
+  return { jobs: data?.items ?? [], error, mutate };
 }
 
 export function useJob(id: string | undefined) {

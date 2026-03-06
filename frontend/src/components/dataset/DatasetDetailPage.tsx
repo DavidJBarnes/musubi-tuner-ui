@@ -2,17 +2,18 @@ import { useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import useSWR from "swr";
 import { api, fetcher } from "../../api/client";
-import type { VideoInfo } from "../../api/types";
+import type { PaginatedResponse, VideoInfo } from "../../api/types";
 import { CaptionEditor } from "./CaptionEditor";
 import { UploadDropzone } from "./UploadDropzone";
 import { VideoCard } from "./VideoCard";
 
 export function DatasetDetailPage() {
   const { name } = useParams<{ name: string }>();
-  const { data: videos, mutate } = useSWR<VideoInfo[]>(
+  const { data: videosResponse, mutate } = useSWR<PaginatedResponse<VideoInfo>>(
     name ? `/datasets/${encodeURIComponent(name)}/videos` : null,
     fetcher,
   );
+  const videos = videosResponse?.items;
   const [selected, setSelected] = useState<string | null>(null);
 
   const selectedVideo = videos?.find((v) => v.name === selected);

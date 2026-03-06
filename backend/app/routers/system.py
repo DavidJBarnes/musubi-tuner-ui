@@ -1,3 +1,5 @@
+"""System and settings API endpoints."""
+
 from fastapi import APIRouter, Depends
 from sqlalchemy.orm import Session
 
@@ -6,24 +8,27 @@ from ..models import Setting
 from ..schemas import GpuStats, SettingsRead, SettingsUpdate
 from ..services.gpu_monitor import get_gpu_stats
 
-router = APIRouter()
+router = APIRouter(tags=["system"])
 
 SETTING_KEYS = ["musubi_tuner_path", "comfyui_models_path", "default_output_dir", "default_dataset_dir"]
 
 
 @router.get("/system/gpu", response_model=GpuStats)
-def gpu_stats():
+def gpu_stats() -> GpuStats:
+    """Get current GPU statistics."""
     return get_gpu_stats()
 
 
 @router.get("/settings", response_model=SettingsRead)
-def read_settings(db: Session = Depends(get_db)):
+def read_settings(db: Session = Depends(get_db)) -> SettingsRead:
+    """Read all application settings."""
     settings = {s.key: s.value for s in db.query(Setting).all()}
     return SettingsRead(**{k: settings.get(k, "") for k in SETTING_KEYS})
 
 
 @router.put("/settings", response_model=SettingsRead)
-def update_settings(data: SettingsUpdate, db: Session = Depends(get_db)):
+def update_settings(data: SettingsUpdate, db: Session = Depends(get_db)) -> SettingsRead:
+    """Update application settings."""
     for key in SETTING_KEYS:
         val = getattr(data, key, None)
         if val is not None:

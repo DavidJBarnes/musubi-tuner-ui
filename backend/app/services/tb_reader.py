@@ -1,7 +1,12 @@
+"""TensorBoard event file reader for loss curve extraction."""
+
 import glob
+import logging
 import os
 
 from ..schemas import LossPoint
+
+logger = logging.getLogger(__name__)
 
 
 def read_loss_curve(tensorboard_dir: str) -> list[LossPoint]:
@@ -39,4 +44,5 @@ def read_loss_curve(tensorboard_dir: str) -> list[LossPoint]:
 
         return points
     except Exception:
+        logger.warning("Failed to read TensorBoard data from %s", tensorboard_dir, exc_info=True)
         return []

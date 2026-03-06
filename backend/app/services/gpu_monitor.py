@@ -1,9 +1,15 @@
+"""GPU monitoring via nvidia-smi."""
+
+import logging
 import subprocess
 
 from ..schemas import GpuStats
 
+logger = logging.getLogger(__name__)
+
 
 def get_gpu_stats() -> GpuStats:
+    """Query nvidia-smi for current GPU statistics."""
     try:
         result = subprocess.run(
             [
@@ -29,4 +35,5 @@ def get_gpu_stats() -> GpuStats:
             available=True,
         )
     except (FileNotFoundError, subprocess.TimeoutExpired, Exception):
+        logger.debug("nvidia-smi unavailable", exc_info=True)
         return GpuStats()
