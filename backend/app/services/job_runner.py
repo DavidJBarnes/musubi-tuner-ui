@@ -283,7 +283,7 @@ def _monitor_job(job_id: str, pid: int) -> None:
                 job.pid = None
                 db.commit()
                 if completed:
-                    _rename_checkpoints(job_id)
+                    _rename_checkpoints(job_id, cleanup_state=True)
                 _advance_queue()
                 return
 
@@ -296,7 +296,7 @@ def _monitor_job(job_id: str, pid: int) -> None:
                     job.completed_at = datetime.now(timezone.utc)
                     job.pid = None
                     db.commit()
-                    _rename_checkpoints(job_id)
+                    _rename_checkpoints(job_id, cleanup_state=True)
                     _advance_queue()
                     return
                 elif progress["phase"] in ("caching_latents", "caching_text", "training"):
@@ -345,11 +345,14 @@ def _infer_exit_from_log(log_file: str | None) -> int:
     return 0 if _log_has_done_phase(log_file) else 1
 
 
-def _rename_checkpoints(job_id: str) -> None:
+def _rename_checkpoints(job_id: str, cleanup_state: bool = False) -> None:
     """Rename checkpoint files from musubi-tuner's default format to include epoch and step.
 
     Renames: {name}-{epoch:06d}.safetensors → {name}-e{epoch:03d}-s{step}.safetensors
     Also renames the final checkpoint: {name}.safetensors → {name}-e{max_epoch:03d}-s{total_steps}.safetensors
+
+    Safe to call while training is running (renames any new checkpoints on disk).
+    Set cleanup_state=True only on job completion to delete state directories.
     """
     db = SessionLocal()
     try:
@@ -392,11 +395,12 @@ def _rename_checkpoints(job_id: str) -> None:
             if not new_path.exists():
                 final.rename(new_path)
 
-        # Clean up state directories (only needed for resume, not after completion)
-        import shutil
-        for state_dir in output_dir.glob(f"{output_name}*-state"):
-            if state_dir.is_dir():
-                shutil.rmtree(state_dir, ignore_errors=True)
+        # Clean up state directories only on completion
+        if cleanup_state:
+            import shutil
+            for state_dir in output_dir.glob(f"{output_name}*-state"):
+                if state_dir.is_dir():
+                    shutil.rmtree(state_dir, ignore_errors=True)
     except Exception:
         pass  # Non-critical — don't fail the job
     finally:
