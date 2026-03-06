@@ -30,6 +30,8 @@ def generate_run_script(
     musubi_path: str,
     comfyui_models_path: str,
     skip_to_phase: str | None = None,
+    resume_from: str | None = None,
+    network_weights: str | None = None,
 ) -> str:
     """Generate a bash script that runs the full training pipeline.
 
@@ -124,8 +126,21 @@ def generate_run_script(
         f"    --output_dir {os.path.expanduser(training_args.output_dir)} \\",
         f"    --output_name {training_args.output_name or job.name} \\",
         f"    --force_v2_1_time_embedding \\",
+        f"    --save_state \\",
+        f"    --save_last_n_epochs_state 1 \\",
         f"    --log_with tensorboard \\",
         f"    --logging_dir {os.path.expanduser(training_args.logging_dir)}",
+    ])
+
+    if resume_from:
+        # Replace the last line (which has no trailing backslash) with a continuation
+        lines[-1] = lines[-1] + " \\"
+        lines.append(f"    --resume {resume_from}")
+    elif network_weights:
+        lines[-1] = lines[-1] + " \\"
+        lines.append(f"    --network_weights {network_weights}")
+
+    lines.extend([
         "",
         'echo "### PHASE: done ###"',
     ])
@@ -158,7 +173,7 @@ def generate_dataset_toml(cfg: DatasetConfigForm) -> str:
     return tomli_w.dumps(data)
 
 
-def start_job(job_id: str, skip_to_phase: str | None = None) -> None:
+def start_job(job_id: str, skip_to_phase: str | None = None, resume_from: str | None = None, network_weights: str | None = None) -> None:
     """Start a training job in a detached subprocess."""
     db = SessionLocal()
     try:
@@ -188,7 +203,7 @@ def start_job(job_id: str, skip_to_phase: str | None = None) -> None:
         toml_path.write_text(toml_content)
 
         # Generate and write run script
-        script_content = generate_run_script(job, dataset_cfg, training_args, musubi_path, comfyui_models_path, skip_to_phase=skip_to_phase)
+        script_content = generate_run_script(job, dataset_cfg, training_args, musubi_path, comfyui_models_path, skip_to_phase=skip_to_phase, resume_from=resume_from, network_weights=network_weights)
         script_path = config.log_dir / f"{job.id}_run.sh"
         script_path.write_text(script_content)
         script_path.chmod(script_path.stat().st_mode | stat.S_IEXEC)
@@ -238,7 +253,7 @@ def _monitor_job(job_id: str, pid: int) -> None:
         db = SessionLocal()
         try:
             job = db.query(Job).filter(Job.id == job_id).first()
-            if not job or job.status in ("completed", "failed", "cancelled"):
+            if not job or job.status in ("completed", "failed", "cancelled", "stopped"):
                 return
 
             # Check if process is still alive AND is our training process
@@ -376,6 +391,12 @@ def _rename_checkpoints(job_id: str) -> None:
             new_path = output_dir / new_name
             if not new_path.exists():
                 final.rename(new_path)
+
+        # Clean up state directories (only needed for resume, not after completion)
+        import shutil
+        for state_dir in output_dir.glob(f"{output_name}*-state"):
+            if state_dir.is_dir():
+                shutil.rmtree(state_dir, ignore_errors=True)
     except Exception:
         pass  # Non-critical — don't fail the job
     finally:
@@ -406,6 +427,92 @@ def cancel_job(job_id: str) -> bool:
 
         if was_running:
             _advance_queue()
+        return True
+    finally:
+        db.close()
+
+
+def stop_job(job_id: str) -> bool:
+    """Stop a running job (can be resumed later)."""
+    db = SessionLocal()
+    try:
+        job = db.query(Job).filter(Job.id == job_id).first()
+        if not job:
+            return False
+
+        was_running = job.status in ("caching_latents", "caching_text", "training")
+        if not was_running:
+            return False
+
+        if job.pid:
+            try:
+                os.killpg(os.getpgid(job.pid), signal.SIGTERM)
+            except (OSError, ProcessLookupError):
+                pass
+
+        job.status = "stopped"
+        job.completed_at = datetime.now(timezone.utc)
+        job.pid = None
+        db.commit()
+
+        _advance_queue()
+        return True
+    finally:
+        db.close()
+
+
+def resume_job(job_id: str) -> bool:
+    """Resume a stopped or failed job from its last saved state."""
+    db = SessionLocal()
+    try:
+        job = db.query(Job).filter(Job.id == job_id).first()
+        if not job:
+            return False
+        if job.status not in ("stopped", "failed"):
+            return False
+
+        # Find the latest state directory or checkpoint
+        resume_from = None
+        network_weights = None
+        output_dir = job.output_dir
+        if output_dir:
+            try:
+                args = json.loads(job.training_args)
+            except (json.JSONDecodeError, TypeError):
+                args = {}
+            output_name = args.get("output_name") or job.name
+            output_path = Path(output_dir)
+            if output_path.exists():
+                state_dirs = sorted(output_path.glob(f"{output_name}*-state"), key=lambda p: p.name)
+                if state_dirs:
+                    resume_from = str(state_dirs[-1])
+                else:
+                    # Fallback: use latest checkpoint as network_weights (no optimizer state)
+                    checkpoints = sorted(output_path.glob(f"{output_name}*.safetensors"), key=lambda p: p.stat().st_mtime)
+                    if checkpoints:
+                        network_weights = str(checkpoints[-1])
+
+        running = has_running_job()
+
+        # Reset job state for re-run
+        job.error_message = None
+        job.completed_at = None
+        job.pid = None
+        job.progress_current = 0
+
+        if running:
+            job.status = "queued"
+            job.queue_position = _assign_queue_position(db)
+            db.commit()
+        else:
+            job.status = "pending"
+            db.commit()
+            threading.Thread(
+                target=start_job,
+                args=(job.id, "training", resume_from, network_weights),
+                daemon=True,
+            ).start()
+
         return True
     finally:
         db.close()

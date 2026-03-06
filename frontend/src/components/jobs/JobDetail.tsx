@@ -25,7 +25,7 @@ export function JobDetailPage() {
   const isActive = ACTIVE.includes(job.status);
 
   const cancel = async () => {
-    if (!confirm("Cancel this job?")) return;
+    if (!confirm("Cancel this job? This is permanent — you won't be able to resume.")) return;
     await api.del(`/jobs/${job.id}`);
     mutate();
   };
@@ -34,6 +34,19 @@ export function JobDetailPage() {
     await api.post(`/jobs/${job.id}/retry`, {});
     mutate();
   };
+
+  const stop = async () => {
+    if (!confirm("Stop this job? You can resume it later from the last checkpoint.")) return;
+    await api.post(`/jobs/${job.id}/stop`, {});
+    mutate();
+  };
+
+  const resume = async () => {
+    await api.post(`/jobs/${job.id}/resume`, {});
+    mutate();
+  };
+
+  const isRunning = ["caching_latents", "caching_text", "training"].includes(job.status);
 
   return (
     <div>
@@ -45,21 +58,69 @@ export function JobDetailPage() {
             {job.dataset_name && <> &middot; {job.dataset_name}</>}
           </p>
         </div>
-        <div className="flex gap-2">
-          {isActive && (
+        <div className="flex items-center gap-2">
+          {isRunning && (
+            <>
+              <button
+                onClick={stop}
+                className="px-3 py-1.5 text-sm text-error border border-error/30 rounded hover:bg-error/10 transition-colors"
+              >
+                Stop Job
+              </button>
+              <button
+                onClick={cancel}
+                className="text-xs text-text-dim hover:text-error transition-colors"
+              >
+                Cancel
+              </button>
+            </>
+          )}
+          {job.status === "stopped" && (
+            <>
+              <button
+                onClick={resume}
+                className="px-3 py-1.5 text-sm text-accent border border-accent/30 rounded hover:bg-accent/10 transition-colors"
+              >
+                Resume Job
+              </button>
+              <button
+                onClick={cancel}
+                className="text-xs text-text-dim hover:text-error transition-colors"
+              >
+                Cancel
+              </button>
+            </>
+          )}
+          {job.status === "failed" && (
+            <>
+              <button
+                onClick={resume}
+                className="px-3 py-1.5 text-sm text-accent border border-accent/30 rounded hover:bg-accent/10 transition-colors"
+              >
+                Resume Job
+              </button>
+              <button
+                onClick={retry}
+                className="px-3 py-1.5 text-sm text-text-dim border border-border rounded hover:bg-surface-2 transition-colors"
+              >
+                Retry Job
+              </button>
+            </>
+          )}
+          {job.status === "cancelled" && (
+            <button
+              onClick={retry}
+              className="px-3 py-1.5 text-sm text-text-dim border border-border rounded hover:bg-surface-2 transition-colors"
+            >
+              Retry Job
+            </button>
+          )}
+          {(isActive && !isRunning) && (
             <button
               onClick={cancel}
               className="px-3 py-1.5 text-sm text-error border border-error/30 rounded hover:bg-error/10 transition-colors"
             >
               Cancel Job
-            </button>
-          )}
-          {(job.status === "failed" || job.status === "cancelled") && (
-            <button
-              onClick={retry}
-              className="px-3 py-1.5 text-sm text-accent border border-accent/30 rounded hover:bg-accent/10 transition-colors"
-            >
-              Retry Job
             </button>
           )}
         </div>

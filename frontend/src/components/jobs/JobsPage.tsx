@@ -12,6 +12,7 @@ const STATUS_COLORS: Record<string, string> = {
   completed: "bg-success",
   failed: "bg-error",
   cancelled: "bg-gray-500",
+  stopped: "bg-yellow-500",
 };
 
 const RUNNING_STATUSES = ["caching_latents", "caching_text", "training", "pending"];

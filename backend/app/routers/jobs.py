@@ -11,7 +11,7 @@ from sqlalchemy.orm import Session
 from ..database import get_db
 from ..models import Job
 from ..schemas import JobAdopt, JobCreate, JobDetail, JobRead, LossPoint
-from ..services.job_runner import cancel_job, has_running_job, start_job, adopt_job, _assign_queue_position, _rename_checkpoints
+from ..services.job_runner import cancel_job, stop_job, resume_job, has_running_job, start_job, adopt_job, _assign_queue_position, _rename_checkpoints
 from ..services.progress import parse_progress_from_log
 from ..services.log_streamer import tail_log
 from ..services.tb_reader import read_loss_curve
@@ -119,6 +119,32 @@ def retry_job(job_id: str, db: Session = Depends(get_db)):
     return job
 
 
+@router.post("/{job_id}/stop")
+def stop_job_endpoint(job_id: str, db: Session = Depends(get_db)):
+    """Stop a running job (can be resumed later)."""
+    job = db.query(Job).filter(Job.id == job_id).first()
+    if not job:
+        raise HTTPException(404, "Job not found")
+    if job.status not in ("caching_latents", "caching_text", "training"):
+        raise HTTPException(400, f"Cannot stop a job with status '{job.status}'")
+    stop_job(job_id)
+    db.refresh(job)
+    return {"stopped": True, "status": job.status}
+
+
+@router.post("/{job_id}/resume", response_model=JobRead)
+def resume_job_endpoint(job_id: str, db: Session = Depends(get_db)):
+    """Resume a stopped or failed job from its last checkpoint."""
+    job = db.query(Job).filter(Job.id == job_id).first()
+    if not job:
+        raise HTTPException(404, "Job not found")
+    if job.status not in ("stopped", "failed"):
+        raise HTTPException(400, f"Cannot resume a job with status '{job.status}'")
+    resume_job(job_id)
+    db.refresh(job)
+    return job
+
+
 @router.get("/{job_id}/logs")
 async def stream_logs(job_id: str, db: Session = Depends(get_db)):
     job = db.query(Job).filter(Job.id == job_id).first()
@@ -134,7 +160,7 @@ async def stream_logs(job_id: str, db: Session = Depends(get_db)):
             db2 = next(get_db())
             j = db2.query(Job).filter(Job.id == job_id).first()
             db2.close()
-            if j and j.status in ("completed", "failed", "cancelled"):
+            if j and j.status in ("completed", "failed", "cancelled", "stopped"):
                 yield f"data: {json.dumps({'done': True, 'status': j.status})}\n\n"
                 return
 
