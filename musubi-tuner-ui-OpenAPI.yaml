@@ -1,0 +1,1098 @@
+openapi: 3.1.0
+info:
+  title: Musubi Tuner UI
+  version: 0.1.0
+  description: Web UI for musubi-tuner WAN 2.2 LoRA training
+
+servers:
+  - url: http://localhost:8000
+    description: Local development
+
+paths:
+  /api/health:
+    get:
+      summary: Health check
+      operationId: health
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    example: ok
+
+  /api/system/gpu:
+    get:
+      summary: Get GPU statistics
+      operationId: gpu_stats
+      responses:
+        "200":
+          description: GPU stats from nvidia-smi
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/GpuStats"
+
+  /api/settings:
+    get:
+      summary: Read application settings
+      operationId: read_settings
+      responses:
+        "200":
+          description: Current settings
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SettingsRead"
+    put:
+      summary: Update application settings
+      operationId: update_settings
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SettingsUpdate"
+      responses:
+        "200":
+          description: Updated settings
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SettingsRead"
+
+  /api/datasets:
+    get:
+      summary: List all datasets
+      description: Auto-discovers on-disk dataset folders not yet in DB.
+      operationId: list_datasets
+      responses:
+        "200":
+          description: List of datasets
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/DatasetInfo"
+        "400":
+          description: default_dataset_dir not configured or does not exist
+    post:
+      summary: Create a new dataset
+      description: Creates a DB record and an on-disk folder.
+      operationId: create_dataset
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/DatasetCreate"
+      responses:
+        "200":
+          description: Created dataset
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DatasetInfo"
+        "400":
+          description: default_dataset_dir not configured
+        "409":
+          description: Dataset name already exists
+
+  /api/datasets/{name}:
+    delete:
+      summary: Delete a dataset record
+      description: Removes the DB record only. Does not delete on-disk files.
+      operationId: delete_dataset
+      parameters:
+        - name: name
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Deleted
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  deleted:
+                    type: string
+        "404":
+          description: Dataset not found
+
+  /api/datasets/{name}/videos:
+    get:
+      summary: List videos in a dataset
+      operationId: list_videos
+      parameters:
+        - name: name
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Video list
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/VideoInfo"
+        "404":
+          description: Dataset folder not found
+
+  /api/datasets/{name}/videos/upload:
+    post:
+      summary: Upload video files to a dataset
+      operationId: upload_videos
+      parameters:
+        - name: name
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              properties:
+                files:
+                  type: array
+                  items:
+                    type: string
+                    format: binary
+      responses:
+        "200":
+          description: Upload result
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  uploaded:
+                    type: array
+                    items:
+                      type: string
+
+  /api/datasets/{name}/videos/{video}:
+    delete:
+      summary: Delete a video and its caption
+      operationId: delete_video
+      parameters:
+        - name: name
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: video
+          in: path
+          required: true
+          description: Video stem name (without extension)
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Deleted
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  deleted:
+                    type: string
+        "404":
+          description: Video not found
+
+  /api/datasets/{name}/videos/{video}/thumb:
+    get:
+      summary: Get video thumbnail
+      description: Generates thumbnail via ffmpeg on first request, then caches in .thumbs/ dir.
+      operationId: get_thumbnail
+      parameters:
+        - name: name
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: video
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: JPEG thumbnail
+          content:
+            image/jpeg:
+              schema:
+                type: string
+                format: binary
+        "404":
+          description: Video not found
+        "500":
+          description: ffmpeg not available or thumbnail generation failed
+
+  /api/datasets/{name}/videos/{video}/caption:
+    get:
+      summary: Read a video's caption
+      operationId: read_caption
+      parameters:
+        - name: name
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: video
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Caption text
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  name:
+                    type: string
+                  caption:
+                    type: string
+    put:
+      summary: Write a video's caption
+      operationId: write_caption
+      parameters:
+        - name: name
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: video
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                caption:
+                  type: string
+      responses:
+        "200":
+          description: Updated caption
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  name:
+                    type: string
+                  caption:
+                    type: string
+        "404":
+          description: Video not found
+
+  /api/configs/presets:
+    get:
+      summary: List training presets
+      operationId: list_presets
+      responses:
+        "200":
+          description: Available presets
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/PresetInfo"
+
+  /api/configs/presets/{filename}:
+    get:
+      summary: Get a specific preset
+      operationId: get_preset
+      parameters:
+        - name: filename
+          in: path
+          required: true
+          description: JSON filename (e.g. rtx3090_high_noise.json)
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Preset JSON content
+          content:
+            application/json:
+              schema:
+                type: object
+                description: Raw preset JSON with name, description, and training_args
+        "404":
+          description: Preset not found
+
+  /api/configs/generate-toml:
+    post:
+      summary: Generate dataset TOML from config form
+      operationId: generate_toml
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/TomlGenerateRequest"
+      responses:
+        "200":
+          description: Generated TOML
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  toml:
+                    type: string
+
+  /api/configs/validate:
+    post:
+      summary: Validate config paths exist on disk
+      operationId: validate_config
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/TomlGenerateRequest"
+      responses:
+        "200":
+          description: Validation result
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  valid:
+                    type: boolean
+                  errors:
+                    type: array
+                    items:
+                      type: string
+
+  /api/jobs:
+    get:
+      summary: List all jobs
+      description: Returns all jobs ordered by created_at desc.
+      operationId: list_jobs
+      responses:
+        "200":
+          description: Job list
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/JobRead"
+    post:
+      summary: Create and start a training job
+      description: >
+        If a job is already running, the new job is queued.
+        Otherwise it starts immediately in a detached subprocess.
+      operationId: create_job
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/JobCreate"
+      responses:
+        "200":
+          description: Created job
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/JobRead"
+
+  /api/jobs/adopt:
+    post:
+      summary: Adopt an externally-started training job
+      description: Creates a job record for monitoring an already-running training process.
+      operationId: adopt_existing_job
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/JobAdopt"
+      responses:
+        "200":
+          description: Adopted job
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/JobRead"
+
+  /api/jobs/{job_id}:
+    get:
+      summary: Get job details
+      operationId: get_job
+      parameters:
+        - name: job_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "200":
+          description: Job detail
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/JobDetail"
+        "404":
+          description: Job not found
+    delete:
+      summary: Cancel and delete a job
+      description: Cancels running/queued jobs (SIGTERM to process group), then marks as cancelled.
+      operationId: delete_job
+      parameters:
+        - name: job_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "200":
+          description: Cancellation result
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  cancelled:
+                    type: boolean
+                  status:
+                    type: string
+        "404":
+          description: Job not found
+
+  /api/jobs/{job_id}/retry:
+    post:
+      summary: Retry a failed or cancelled job
+      description: Re-generates script and re-runs. May skip caching phases if already completed.
+      operationId: retry_job
+      parameters:
+        - name: job_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "200":
+          description: Retried job
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/JobRead"
+        "400":
+          description: Job status does not allow retry
+        "404":
+          description: Job not found
+
+  /api/jobs/{job_id}/stop:
+    post:
+      summary: Stop a running job
+      description: Sends SIGTERM. Job can be resumed later from last checkpoint.
+      operationId: stop_job_endpoint
+      parameters:
+        - name: job_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "200":
+          description: Stop result
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  stopped:
+                    type: boolean
+                  status:
+                    type: string
+        "400":
+          description: Job status does not allow stopping
+        "404":
+          description: Job not found
+
+  /api/jobs/{job_id}/resume:
+    post:
+      summary: Resume a stopped or failed job
+      description: >
+        Finds the latest state directory or checkpoint and resumes training.
+        If a state dir exists, uses --resume. Otherwise uses latest checkpoint as --network_weights.
+      operationId: resume_job_endpoint
+      parameters:
+        - name: job_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "200":
+          description: Resumed job
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/JobRead"
+        "400":
+          description: Job status does not allow resuming
+        "404":
+          description: Job not found
+
+  /api/jobs/{job_id}/logs:
+    get:
+      summary: Stream job logs via SSE
+      description: >
+        Server-Sent Events stream. Each event contains {"line": "..."} or {"done": true, "status": "..."}.
+        Starts from the last 4KB of the log file.
+      operationId: stream_logs
+      parameters:
+        - name: job_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "200":
+          description: SSE event stream
+          content:
+            text/event-stream:
+              schema:
+                type: string
+        "404":
+          description: Job or log file not found
+
+  /api/jobs/{job_id}/stats:
+    get:
+      summary: Get live training stats
+      description: Parses the log file tail for tqdm progress, speed, epoch, and average loss.
+      operationId: get_job_stats
+      parameters:
+        - name: job_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "200":
+          description: Training stats
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/JobStats"
+        "404":
+          description: Job not found
+
+  /api/jobs/{job_id}/rename-checkpoints:
+    post:
+      summary: Rename checkpoint files to include epoch and step
+      operationId: rename_checkpoints
+      parameters:
+        - name: job_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok:
+                    type: boolean
+        "404":
+          description: Job not found
+
+  /api/jobs/{job_id}/checkpoints:
+    get:
+      summary: List saved checkpoint files
+      description: Lists .safetensors/.pt/.pth files in job output dir. Eagerly renames to friendly format.
+      operationId: get_checkpoints
+      parameters:
+        - name: job_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "200":
+          description: Checkpoint list
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Checkpoint"
+        "404":
+          description: Job not found
+
+  /api/jobs/{job_id}/checkpoints/{filename}:
+    get:
+      summary: Download a checkpoint file
+      operationId: download_checkpoint
+      parameters:
+        - name: job_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+        - name: filename
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Checkpoint file download
+          content:
+            application/octet-stream:
+              schema:
+                type: string
+                format: binary
+        "404":
+          description: Job or checkpoint not found
+
+  /api/jobs/{job_id}/loss:
+    get:
+      summary: Get loss curve data from TensorBoard
+      operationId: get_loss_curve
+      parameters:
+        - name: job_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "200":
+          description: Loss data points
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/LossPoint"
+        "404":
+          description: Job not found
+
+components:
+  schemas:
+    GpuStats:
+      type: object
+      properties:
+        name:
+          type: string
+          example: NVIDIA GeForce RTX 3090
+        vram_used_mb:
+          type: integer
+          example: 4096
+        vram_total_mb:
+          type: integer
+          example: 24576
+        utilization_pct:
+          type: integer
+          example: 85
+        temperature_c:
+          type: integer
+          example: 72
+        available:
+          type: boolean
+
+    SettingsRead:
+      type: object
+      properties:
+        musubi_tuner_path:
+          type: string
+        comfyui_models_path:
+          type: string
+        default_output_dir:
+          type: string
+        default_dataset_dir:
+          type: string
+
+    SettingsUpdate:
+      type: object
+      properties:
+        musubi_tuner_path:
+          type: string
+          nullable: true
+        comfyui_models_path:
+          type: string
+          nullable: true
+        default_output_dir:
+          type: string
+          nullable: true
+        default_dataset_dir:
+          type: string
+          nullable: true
+
+    DatasetInfo:
+      type: object
+      required: [id, name, created_at]
+      properties:
+        id:
+          type: string
+          format: uuid
+        name:
+          type: string
+        video_count:
+          type: integer
+          default: 0
+        created_at:
+          type: string
+          format: date-time
+
+    DatasetCreate:
+      type: object
+      required: [name]
+      properties:
+        name:
+          type: string
+          pattern: "^[a-zA-Z0-9_-]+$"
+          description: Alphanumeric, hyphens, or underscores only
+
+    VideoInfo:
+      type: object
+      properties:
+        name:
+          type: string
+          description: Video stem name (without extension)
+        filename:
+          type: string
+          description: Full filename with extension
+        caption:
+          type: string
+          default: ""
+        has_caption:
+          type: boolean
+          default: false
+        size_bytes:
+          type: integer
+          default: 0
+        frame_count:
+          type: integer
+          nullable: true
+
+    PresetInfo:
+      type: object
+      properties:
+        name:
+          type: string
+        filename:
+          type: string
+        description:
+          type: string
+
+    DatasetConfigForm:
+      type: object
+      properties:
+        video_directory:
+          type: string
+        cache_directory:
+          type: string
+        resolution:
+          type: array
+          items:
+            type: integer
+          default: [480, 832]
+        caption_extension:
+          type: string
+          default: ".txt"
+        batch_size:
+          type: integer
+          default: 1
+        enable_bucket:
+          type: boolean
+          default: false
+        target_frames:
+          type: array
+          items:
+            type: integer
+          default: [61]
+        frame_extraction:
+          type: string
+          default: full
+          enum: [full, head, chunk, slide]
+        num_repeats:
+          type: integer
+          default: 1
+
+    TrainingArgsForm:
+      type: object
+      properties:
+        task:
+          type: string
+          default: i2v-A14B
+        dit_path:
+          type: string
+        vae_path:
+          type: string
+        t5_path:
+          type: string
+        network_dim:
+          type: integer
+          default: 16
+        network_alpha:
+          type: integer
+          default: 16
+        loraplus_lr_ratio:
+          type: integer
+          default: 4
+        timestep_sampling:
+          type: string
+          default: shift
+        discrete_flow_shift:
+          type: number
+          default: 5.0
+        min_timestep:
+          type: integer
+          default: 900
+        max_timestep:
+          type: integer
+          default: 1000
+        preserve_distribution_shape:
+          type: boolean
+          default: true
+        optimizer_type:
+          type: string
+          default: adamw8bit
+          enum: [adamw8bit, adamw, prodigy]
+        learning_rate:
+          type: number
+          default: 0.0002
+        lr_scheduler:
+          type: string
+          default: cosine
+          enum: [cosine, constant, linear]
+        max_train_epochs:
+          type: integer
+          default: 10
+        save_every_n_epochs:
+          type: integer
+          default: 1
+        mixed_precision:
+          type: string
+          default: fp16
+        fp8_base:
+          type: boolean
+          default: true
+        fp8_scaled:
+          type: boolean
+          default: true
+        gradient_checkpointing:
+          type: boolean
+          default: true
+        blocks_to_swap:
+          type: integer
+          default: 36
+        output_dir:
+          type: string
+        output_name:
+          type: string
+        logging_dir:
+          type: string
+        seed:
+          type: integer
+          default: 42
+
+    TomlGenerateRequest:
+      type: object
+      required: [dataset_config, training_args]
+      properties:
+        dataset_config:
+          $ref: "#/components/schemas/DatasetConfigForm"
+        training_args:
+          $ref: "#/components/schemas/TrainingArgsForm"
+
+    JobCreate:
+      type: object
+      required: [name, job_type, dataset_config, training_args]
+      properties:
+        name:
+          type: string
+        job_type:
+          type: string
+          enum: [high_noise, low_noise, both]
+        dataset_config:
+          $ref: "#/components/schemas/DatasetConfigForm"
+        training_args:
+          $ref: "#/components/schemas/TrainingArgsForm"
+        dataset_name:
+          type: string
+          nullable: true
+
+    JobAdopt:
+      type: object
+      required: [name, log_file, tensorboard_dir]
+      properties:
+        name:
+          type: string
+        job_type:
+          type: string
+          default: high_noise
+          enum: [high_noise, low_noise, both]
+        log_file:
+          type: string
+          description: Absolute path to log file
+        tensorboard_dir:
+          type: string
+          description: Absolute path to TensorBoard log directory
+        output_dir:
+          type: string
+          default: ""
+          description: Absolute path to checkpoint output directory
+
+    JobRead:
+      type: object
+      required: [id, name, status, job_type, created_at]
+      properties:
+        id:
+          type: string
+          format: uuid
+        name:
+          type: string
+        status:
+          type: string
+          enum: [pending, queued, caching_latents, caching_text, training, completed, failed, cancelled, stopped]
+        job_type:
+          type: string
+          enum: [high_noise, low_noise, both]
+        pid:
+          type: integer
+          nullable: true
+        progress_current:
+          type: integer
+          default: 0
+        progress_total:
+          type: integer
+          default: 0
+        current_phase:
+          type: string
+          nullable: true
+          enum: [caching_latents, caching_text, training, done, null]
+        output_dir:
+          type: string
+          nullable: true
+        created_at:
+          type: string
+          format: date-time
+        started_at:
+          type: string
+          format: date-time
+          nullable: true
+        completed_at:
+          type: string
+          format: date-time
+          nullable: true
+        error_message:
+          type: string
+          nullable: true
+        queue_position:
+          type: integer
+          nullable: true
+        dataset_name:
+          type: string
+          nullable: true
+
+    JobDetail:
+      allOf:
+        - $ref: "#/components/schemas/JobRead"
+        - type: object
+          properties:
+            dataset_config:
+              type: string
+              description: JSON string of DatasetConfigForm snapshot
+            training_args:
+              type: string
+              description: JSON string of TrainingArgsForm snapshot
+            tensorboard_dir:
+              type: string
+              nullable: true
+            log_file:
+              type: string
+              nullable: true
+
+    JobStats:
+      type: object
+      properties:
+        speed:
+          type: number
+          nullable: true
+          description: Seconds per step
+        epoch:
+          type: integer
+          default: 0
+        total_epochs:
+          type: integer
+          default: 0
+        current:
+          type: integer
+          default: 0
+        total:
+          type: integer
+          default: 0
+        save_every_n_epochs:
+          type: integer
+          default: 1
+        avr_loss:
+          type: number
+          nullable: true
+
+    LossPoint:
+      type: object
+      required: [step, value]
+      properties:
+        step:
+          type: integer
+        value:
+          type: number
+
+    Checkpoint:
+      type: object
+      properties:
+        filename:
+          type: string
+        path:
+          type: string
+          description: Absolute filesystem path
+        size_bytes:
+          type: integer
+        modified:
+          type: number
+          description: Unix timestamp (seconds)
