@@ -7,7 +7,7 @@ interface Props {
   jobId: string;
 }
 
-function computeTrendLine(points: LossPoint[]): LossPoint[] {
+export function computeTrendLine(points: LossPoint[]): LossPoint[] {
   if (points.length < 2) return [];
 
   // Simple linear regression
