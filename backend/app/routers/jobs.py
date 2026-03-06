@@ -11,7 +11,7 @@ from sqlalchemy.orm import Session
 from ..database import get_db
 from ..models import Job
 from ..schemas import JobAdopt, JobCreate, JobDetail, JobRead, LossPoint
-from ..services.job_runner import cancel_job, has_running_job, start_job, adopt_job, _assign_queue_position
+from ..services.job_runner import cancel_job, has_running_job, start_job, adopt_job, _assign_queue_position, _rename_checkpoints
 from ..services.progress import parse_progress_from_log
 from ..services.log_streamer import tail_log
 from ..services.tb_reader import read_loss_curve
@@ -183,6 +183,16 @@ def get_job_stats(job_id: str, db: Session = Depends(get_db)):
         "save_every_n_epochs": save_every,
         "avr_loss": progress.get("avr_loss"),
     }
+
+
+@router.post("/{job_id}/rename-checkpoints")
+def rename_checkpoints(job_id: str, db: Session = Depends(get_db)):
+    """Rename checkpoint files to include epoch and step numbers."""
+    job = db.query(Job).filter(Job.id == job_id).first()
+    if not job:
+        raise HTTPException(404, "Job not found")
+    _rename_checkpoints(job_id)
+    return {"ok": True}
 
 
 @router.get("/{job_id}/checkpoints")
