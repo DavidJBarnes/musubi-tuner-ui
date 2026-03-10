@@ -27,8 +27,8 @@ export function VideoPreviewModal({ video, datasetName, onClose, onSaved, onDele
       }}
       data-testid="modal-backdrop"
     >
-      <div className="bg-surface rounded-lg border border-border shadow-xl max-w-5xl w-full mx-4 max-h-[90vh] overflow-y-auto">
-        <div className="flex justify-between items-center p-4 border-b border-border">
+      <div className="bg-surface rounded-lg border border-border shadow-xl max-w-5xl w-full mx-4 max-h-[90vh] flex flex-col">
+        <div className="flex justify-between items-center p-4 border-b border-border shrink-0">
           <h3 className="font-medium">{video.filename}</h3>
           <button
             onClick={onClose}
@@ -38,16 +38,16 @@ export function VideoPreviewModal({ video, datasetName, onClose, onSaved, onDele
             &times;
           </button>
         </div>
-        <div className="grid grid-cols-1 md:grid-cols-5 gap-4 p-4">
-          <div className="md:col-span-3">
+        <div className="flex flex-col md:flex-row gap-4 p-4 min-h-0 overflow-y-auto">
+          <div className="flex items-start justify-center md:w-1/2 shrink-0">
             <video
               controls
               autoPlay
-              className="w-full rounded bg-black"
+              className="max-h-[70vh] max-w-full rounded bg-black"
               src={`/api/datasets/${encodeURIComponent(datasetName)}/videos/${encodeURIComponent(video.name)}/stream`}
             />
           </div>
-          <div className="md:col-span-2">
+          <div className="md:w-1/2 min-w-0">
             <CaptionEditor video={video} datasetName={datasetName} onSaved={onSaved} />
             <button
               onClick={() => onDelete(video.name)}
