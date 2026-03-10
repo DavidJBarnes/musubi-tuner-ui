@@ -36,6 +36,13 @@ export function DatasetTomlForm({ config, onChange, datasetSelected }: Props) {
         </button>
       </div>
 
+      {/* Always-visible fields */}
+      <div className="grid grid-cols-2 gap-3 mb-3">
+        <Field label="Num Repeats">
+          <input type="number" className={inputCls} value={config.num_repeats} onChange={(e) => set("num_repeats", parseInt(e.target.value) || 1)} />
+        </Field>
+      </div>
+
       {/* Summary when collapsed */}
       {!expanded && (
         <div className="text-xs text-text-dim space-y-1">
@@ -95,14 +102,9 @@ export function DatasetTomlForm({ config, onChange, datasetSelected }: Props) {
               </select>
             </Field>
           </div>
-          <div className="grid grid-cols-2 gap-3">
-            <Field label="Batch Size">
-              <input type="number" className={inputCls} value={config.batch_size} onChange={(e) => set("batch_size", parseInt(e.target.value) || 1)} />
-            </Field>
-            <Field label="Num Repeats">
-              <input type="number" className={inputCls} value={config.num_repeats} onChange={(e) => set("num_repeats", parseInt(e.target.value) || 1)} />
-            </Field>
-          </div>
+          <Field label="Batch Size">
+            <input type="number" className={inputCls} value={config.batch_size} onChange={(e) => set("batch_size", parseInt(e.target.value) || 1)} />
+          </Field>
           <Field label="Caption Extension">
             <input className={inputCls} value={config.caption_extension} onChange={(e) => set("caption_extension", e.target.value)} />
           </Field>
