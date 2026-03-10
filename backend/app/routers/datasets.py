@@ -170,16 +170,43 @@ def get_thumbnail(name: str, video: str, db: Session = Depends(get_db)):
 
 @router.get("/{name}/videos/{video}/stream")
 def stream_video(name: str, video: str, db: Session = Depends(get_db)):
-    """Stream a video file."""
+    """Stream a browser-playable version of a video file.
+
+    If the original video uses a codec browsers can't play (e.g. mpeg4 Part 2),
+    a h264 copy is transcoded on first request and cached in .previews/.
+    """
     dataset_dir = _get_dataset_dir(db, name)
     video_file = _find_video(dataset_dir, video)
     if not video_file:
         raise HTTPException(404, "Video not found")
-    mime = {
-        ".mp4": "video/mp4", ".webm": "video/webm", ".mkv": "video/x-matroska",
-        ".avi": "video/x-msvideo", ".mov": "video/quicktime",
-    }.get(video_file.suffix.lower(), "video/mp4")
-    return FileResponse(video_file, media_type=mime)
+
+    preview_dir = dataset_dir / ".previews"
+    preview_path = preview_dir / f"{video}.mp4"
+
+    if not preview_path.exists():
+        preview_dir.mkdir(exist_ok=True)
+        try:
+            result = subprocess.run(
+                [
+                    "ffmpeg", "-y", "-i", str(video_file),
+                    "-c:v", "libx264", "-preset", "fast", "-crf", "23",
+                    "-c:a", "aac",
+                    "-movflags", "+faststart",
+                    str(preview_path),
+                ],
+                capture_output=True,
+                timeout=120,
+            )
+            if result.returncode != 0:
+                logger.error("ffmpeg preview failed: %s", result.stderr.decode(errors="replace"))
+                raise HTTPException(500, "Failed to generate preview")
+        except FileNotFoundError:
+            raise HTTPException(500, "ffmpeg not available")
+        except subprocess.TimeoutExpired:
+            preview_path.unlink(missing_ok=True)
+            raise HTTPException(500, "Preview generation timed out")
+
+    return FileResponse(preview_path, media_type="video/mp4")
 
 
 @router.get("/{name}/videos/{video}/caption")
@@ -234,6 +261,9 @@ def delete_video(name: str, video: str, db: Session = Depends(get_db)) -> dict:
     thumb = dataset_dir / ".thumbs" / f"{video}.jpg"
     if thumb.exists():
         thumb.unlink()
+    preview = dataset_dir / ".previews" / f"{video}.mp4"
+    if preview.exists():
+        preview.unlink()
 
     return {"deleted": video}
 
