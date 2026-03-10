@@ -74,15 +74,27 @@ describe("DatasetDetailPage", () => {
     expect(screen.getByText("Drop videos here or click to browse")).toBeInTheDocument();
   });
 
-  it("shows caption editor when a video is selected", async () => {
+  it("opens video modal when a video is clicked", async () => {
     const video = makeVideoInfo({ name: "v1", filename: "v1.mp4", caption: "Test caption" });
     mockUseSWR.mockReturnValue({ data: { items: [video] }, mutate: mockMutate });
     renderPage();
 
     await userEvent.click(screen.getByText("v1.mp4"));
 
-    expect(screen.getByRole("textbox")).toHaveValue("Test caption");
+    // Modal should be open with video element and delete button
+    expect(document.querySelector("video")).toBeInTheDocument();
     expect(screen.getByText("Delete Video")).toBeInTheDocument();
+  });
+
+  it("does not render a side panel", async () => {
+    const video = makeVideoInfo({ name: "v1", filename: "v1.mp4" });
+    mockUseSWR.mockReturnValue({ data: { items: [video] }, mutate: mockMutate });
+    renderPage();
+
+    await userEvent.click(screen.getByText("v1.mp4"));
+
+    expect(document.querySelector(".col-span-4")).toBeNull();
+    expect(document.querySelector(".col-span-8")).toBeNull();
   });
 
   it("has back link to datasets list", () => {

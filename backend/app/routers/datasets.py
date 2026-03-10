@@ -168,6 +168,20 @@ def get_thumbnail(name: str, video: str, db: Session = Depends(get_db)):
     raise HTTPException(500, "Failed to generate thumbnail")
 
 
+@router.get("/{name}/videos/{video}/stream")
+def stream_video(name: str, video: str, db: Session = Depends(get_db)):
+    """Stream a video file."""
+    dataset_dir = _get_dataset_dir(db, name)
+    video_file = _find_video(dataset_dir, video)
+    if not video_file:
+        raise HTTPException(404, "Video not found")
+    mime = {
+        ".mp4": "video/mp4", ".webm": "video/webm", ".mkv": "video/x-matroska",
+        ".avi": "video/x-msvideo", ".mov": "video/quicktime",
+    }.get(video_file.suffix.lower(), "video/mp4")
+    return FileResponse(video_file, media_type=mime)
+
+
 @router.get("/{name}/videos/{video}/caption")
 def read_caption(name: str, video: str, db: Session = Depends(get_db)) -> dict:
     """Read the caption for a video."""
