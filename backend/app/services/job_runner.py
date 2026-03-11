@@ -471,6 +471,76 @@ def stop_job(job_id: str) -> bool:
         db.close()
 
 
+def _find_resume_artifacts(job: Job) -> tuple[str | None, str | None]:
+    """Find the latest checkpoint or state dir for resuming a job.
+
+    Returns (resume_from, network_weights):
+    - resume_from: path to state dir (full optimizer state resume)
+    - network_weights: path to .safetensors checkpoint (weights-only fallback)
+    - Both None if no artifacts found.
+    """
+    output_dir = job.output_dir
+    if not output_dir:
+        return None, None
+
+    try:
+        args = json.loads(job.training_args)
+    except (json.JSONDecodeError, TypeError):
+        args = {}
+    output_name = args.get("output_name") or job.name
+    output_path = Path(output_dir)
+    if not output_path.exists():
+        return None, None
+
+    state_dirs = sorted(output_path.glob(f"{output_name}*-state"), key=lambda p: p.name)
+    if state_dirs:
+        return str(state_dirs[-1]), None
+
+    # Fallback: use latest checkpoint as network_weights (no optimizer state)
+    checkpoints = sorted(output_path.glob(f"{output_name}*.safetensors"), key=lambda p: p.stat().st_mtime)
+    if checkpoints:
+        return None, str(checkpoints[-1])
+
+    return None, None
+
+
+def _auto_resume_job(job: Job, db: Session) -> bool:
+    """Attempt to auto-resume a crashed job from its last checkpoint.
+
+    Only auto-resumes jobs that were in the 'training' phase (have checkpoints).
+    Returns True if the job was auto-resumed, False otherwise.
+    """
+    if job.status not in ("caching_latents", "caching_text", "training"):
+        return False
+
+    # Only auto-resume jobs that were training (caching jobs have no checkpoints)
+    if job.status != "training":
+        return False
+
+    resume_from, network_weights = _find_resume_artifacts(job)
+    if not resume_from and not network_weights:
+        return False
+
+    artifact = resume_from or network_weights
+    logger.info("Auto-resuming job %s (%s) from %s", job.id, job.name, artifact)
+
+    # Reset job state for re-run
+    job.error_message = None
+    job.completed_at = None
+    job.pid = None
+    job.progress_current = 0
+    job.status = "pending"
+    db.commit()
+
+    threading.Thread(
+        target=start_job,
+        args=(job.id, "training", resume_from, network_weights),
+        daemon=True,
+    ).start()
+
+    return True
+
+
 def resume_job(job_id: str) -> bool:
     """Resume a stopped or failed job from its last saved state."""
     db = SessionLocal()
@@ -481,26 +551,7 @@ def resume_job(job_id: str) -> bool:
         if job.status not in ("stopped", "failed"):
             return False
 
-        # Find the latest state directory or checkpoint
-        resume_from = None
-        network_weights = None
-        output_dir = job.output_dir
-        if output_dir:
-            try:
-                args = json.loads(job.training_args)
-            except (json.JSONDecodeError, TypeError):
-                args = {}
-            output_name = args.get("output_name") or job.name
-            output_path = Path(output_dir)
-            if output_path.exists():
-                state_dirs = sorted(output_path.glob(f"{output_name}*-state"), key=lambda p: p.name)
-                if state_dirs:
-                    resume_from = str(state_dirs[-1])
-                else:
-                    # Fallback: use latest checkpoint as network_weights (no optimizer state)
-                    checkpoints = sorted(output_path.glob(f"{output_name}*.safetensors"), key=lambda p: p.stat().st_mtime)
-                    if checkpoints:
-                        network_weights = str(checkpoints[-1])
+        resume_from, network_weights = _find_resume_artifacts(job)
 
         running = has_running_job()
 
@@ -544,10 +595,14 @@ def reconcile_jobs() -> None:
                     has_active = True
                     threading.Thread(target=_monitor_job, args=(job.id, job.pid), daemon=True).start()
                 else:
-                    job.status = "failed"
-                    job.error_message = _extract_error_from_log(job.log_file) or "Process lost (backend restarted)"
-                    job.completed_at = datetime.now(timezone.utc)
-                    job.pid = None
+                    # Stale PID — try auto-resume before marking failed
+                    if not has_active and _auto_resume_job(job, db):
+                        has_active = True
+                    else:
+                        job.status = "failed"
+                        job.error_message = _extract_error_from_log(job.log_file) or "Process lost (no checkpoint to resume)"
+                        job.completed_at = datetime.now(timezone.utc)
+                        job.pid = None
             else:
                 if job.status == "pending":
                     pass  # Pending jobs without PID are fine
@@ -556,9 +611,13 @@ def reconcile_jobs() -> None:
                     has_active = True
                     threading.Thread(target=_monitor_adopted_job, args=(job.id,), daemon=True).start()
                 else:
-                    job.status = "failed"
-                    job.error_message = "No PID recorded (backend restarted)"
-                    job.completed_at = datetime.now(timezone.utc)
+                    # No PID, not adopted — try auto-resume before marking failed
+                    if not has_active and _auto_resume_job(job, db):
+                        has_active = True
+                    else:
+                        job.status = "failed"
+                        job.error_message = "No PID recorded (no checkpoint to resume)"
+                        job.completed_at = datetime.now(timezone.utc)
         db.commit()
 
         # If no running job, try to advance the queue
