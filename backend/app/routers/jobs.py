@@ -12,8 +12,8 @@ from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 
 from ..database import get_db
-from ..models import Job
-from ..schemas import JobAdopt, JobCreate, JobDetail, JobRead, LossPoint, PaginatedResponse
+from ..models import Job, Sample
+from ..schemas import JobAdopt, JobCreate, JobDetail, JobRead, LossPoint, PaginatedResponse, SampleRead
 from ..services.job_runner import cancel_job, stop_job, resume_job, has_running_job, start_job, adopt_job, _assign_queue_position, _rename_checkpoints
 from ..services.progress import parse_progress_from_log
 from ..services.log_streamer import tail_log
@@ -42,8 +42,15 @@ def create_job(data: JobCreate, db: Session = Depends(get_db)):
         job_type=data.job_type,
         dataset_config=data.dataset_config.model_dump_json(),
         training_args=data.training_args.model_dump_json(),
+        training_args_low=data.training_args_low.model_dump_json() if data.training_args_low else None,
+        sample_config=data.sample_config.model_dump_json() if data.sample_config else None,
         dataset_name=data.dataset_name,
     )
+
+    if data.job_type == "interleaved":
+        job.interleaved_total_cycles = data.training_args.max_train_epochs
+        job.interleaved_cycle = 0
+        job.interleaved_phase = "pending"
 
     if running:
         job.status = "queued"
@@ -213,7 +220,7 @@ def get_job_stats(job_id: str, db: Session = Depends(get_db)) -> dict:
         except Exception:
             pass
 
-    return {
+    result = {
         "speed": progress.get("speed"),
         "epoch": progress.get("epoch", 0),
         "total_epochs": progress.get("total_epochs", 0),
@@ -222,6 +229,13 @@ def get_job_stats(job_id: str, db: Session = Depends(get_db)) -> dict:
         "save_every_n_epochs": save_every,
         "avr_loss": progress.get("avr_loss"),
     }
+
+    if job.job_type == "interleaved":
+        result["interleaved_cycle"] = job.interleaved_cycle
+        result["interleaved_phase"] = job.interleaved_phase
+        result["interleaved_total_cycles"] = job.interleaved_total_cycles
+
+    return result
 
 
 @router.post("/{job_id}/rename-checkpoints")
@@ -300,3 +314,25 @@ def get_loss_curve(job_id: str, db: Session = Depends(get_db)):
     if not job:
         raise HTTPException(404, "Job not found")
     return read_loss_curve(job.tensorboard_dir or "")
+
+
+@router.get("/{job_id}/samples", response_model=list[SampleRead])
+def list_samples(job_id: str, db: Session = Depends(get_db)):
+    """List all samples generated for a job."""
+    job = db.query(Job).filter(Job.id == job_id).first()
+    if not job:
+        raise HTTPException(404, "Job not found")
+    samples = db.query(Sample).filter(Sample.job_id == job_id).order_by(Sample.cycle.asc()).all()
+    return samples
+
+
+@router.get("/{job_id}/samples/{sample_id}/video")
+def stream_sample_video(job_id: str, sample_id: str, db: Session = Depends(get_db)):
+    """Stream a sample video file."""
+    from fastapi.responses import FileResponse
+    sample = db.query(Sample).filter(Sample.id == sample_id, Sample.job_id == job_id).first()
+    if not sample:
+        raise HTTPException(404, "Sample not found")
+    if not os.path.isfile(sample.video_path):
+        raise HTTPException(404, "Video file not found")
+    return FileResponse(sample.video_path, media_type="video/mp4")

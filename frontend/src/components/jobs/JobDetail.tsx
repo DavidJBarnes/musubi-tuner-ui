@@ -8,6 +8,7 @@ import { Checkpoints } from "./Checkpoints";
 import { LossChart } from "./LossChart";
 import { LogViewer } from "./LogViewer";
 import { ProgressBar } from "./ProgressBar";
+import { Samples } from "./Samples";
 
 const ACTIVE = ["caching_latents", "caching_text", "training", "pending", "queued"];
 
@@ -47,6 +48,7 @@ export function JobDetailPage() {
   };
 
   const isRunning = ["caching_latents", "caching_text", "training"].includes(job.status);
+  const isInterleaved = job.job_type === "interleaved";
 
   return (
     <div>
@@ -137,7 +139,13 @@ export function JobDetailPage() {
           totalEpochs={stats?.total_epochs ?? 0}
           saveEveryNEpochs={stats?.save_every_n_epochs ?? 1}
           avrLoss={stats?.avr_loss ?? null}
+          interleavedCycle={stats?.interleaved_cycle ?? job.interleaved_cycle}
+          interleavedPhase={stats?.interleaved_phase ?? job.interleaved_phase}
+          interleavedTotalCycles={stats?.interleaved_total_cycles ?? job.interleaved_total_cycles}
         />
+
+        {/* Samples section for interleaved jobs */}
+        {isInterleaved && id && <Samples jobId={id} />}
 
         {/* Logs + Checkpoints side by side */}
         {id && (

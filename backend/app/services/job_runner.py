@@ -8,6 +8,7 @@ import signal
 import stat
 import subprocess
 import threading
+import uuid
 import time
 from datetime import datetime, timezone
 from pathlib import Path
@@ -16,8 +17,8 @@ from sqlalchemy.orm import Session
 
 from ..config import config
 from ..database import SessionLocal
-from ..models import Job, Setting
-from ..schemas import DatasetConfigForm, TrainingArgsForm
+from ..models import Job, Sample, Setting
+from ..schemas import DatasetConfigForm, SampleConfig, TrainingArgsForm
 from .progress import parse_progress_from_log
 
 logger = logging.getLogger(__name__)
@@ -178,12 +179,590 @@ def generate_dataset_toml(cfg: DatasetConfigForm) -> str:
     return tomli_w.dumps(data)
 
 
+def generate_sample_script(
+    musubi_path: str,
+    high_dit: str,
+    low_dit: str,
+    vae: str,
+    t5: str,
+    high_checkpoint: str,
+    low_checkpoint: str,
+    image_path: str,
+    prompt: str,
+    output_path: str,
+) -> str:
+    """Generate a bash script for video inference using both high and low noise LoRAs."""
+    lines = [
+        "#!/bin/bash",
+        "set -e",
+        "export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True",
+        f"cd {musubi_path}",
+        "",
+        'if [ -f "venv/bin/activate" ]; then source venv/bin/activate; fi',
+        "",
+        'echo "### PHASE: sampling ###"',
+        f"python src/musubi_tuner/wan_generate_video.py \\",
+        f"    --task i2v-A14B \\",
+        f"    --dit {low_dit} \\",
+        f"    --dit_high_noise {high_dit} \\",
+        f"    --vae {vae} \\",
+        f"    --t5 {t5} \\",
+        f"    --lora_weight {low_checkpoint} \\",
+        f"    --lora_weight_high_noise {high_checkpoint} \\",
+        f"    --image_path {image_path} \\",
+        f'    --prompt "{prompt}" \\',
+        f"    --timestep_boundary 0.9 \\",
+        f"    --video_size 480 832 \\",
+        f"    --video_length 61 \\",
+        f"    --fps 16 \\",
+        f"    --fp8_scaled \\",
+        f"    --blocks_to_swap 20 \\",
+        f"    --save_path {output_path}",
+        "",
+        'echo "### PHASE: done ###"',
+    ]
+    return "\n".join(lines)
+
+
+def _run_subprocess_and_wait(
+    script_path: str,
+    log_file: str,
+    job_id: str,
+    phase_label: str,
+) -> bool:
+    """Spawn a detached subprocess and poll for completion.
+
+    Updates job PID and progress during execution.
+    Returns True on success (exit 0 or done phase), False on failure.
+    """
+    with open(log_file, "a") as log_fd:
+        log_fd.write(f"\n{'='*60}\n")
+        log_fd.write(f"=== {phase_label} ===\n")
+        log_fd.write(f"{'='*60}\n\n")
+        log_fd.flush()
+        proc = subprocess.Popen(
+            ["bash", str(script_path)],
+            stdout=log_fd,
+            stderr=subprocess.STDOUT,
+            start_new_session=True,
+            env={**os.environ, "PYTHONUNBUFFERED": "1"},
+        )
+
+    # Save PID to job
+    db = SessionLocal()
+    try:
+        job = db.query(Job).filter(Job.id == job_id).first()
+        if job:
+            job.pid = proc.pid
+            db.commit()
+    finally:
+        db.close()
+
+    # Poll for completion
+    while True:
+        time.sleep(2)
+        process_alive = False
+        try:
+            os.kill(proc.pid, 0)
+            process_alive = _is_training_process(proc.pid)
+        except OSError:
+            process_alive = False
+
+        # Update progress from log
+        db = SessionLocal()
+        try:
+            job = db.query(Job).filter(Job.id == job_id).first()
+            if not job:
+                return False
+            # Check if job was stopped externally
+            if job.status in ("stopped", "cancelled"):
+                return False
+
+            progress = parse_progress_from_log(log_file)
+            if progress["current"] > 0:
+                job.progress_current = progress["current"]
+                job.progress_total = progress["total"]
+            db.commit()
+        finally:
+            db.close()
+
+        if not process_alive:
+            # Check exit status via waitpid or proc.poll
+            try:
+                _, wait_status = os.waitpid(proc.pid, os.WNOHANG)
+                exit_code = os.WEXITSTATUS(wait_status) if os.WIFEXITED(wait_status) else -1
+            except ChildProcessError:
+                # Process already reaped — check proc object
+                exit_code = proc.poll()
+                if exit_code is None:
+                    exit_code = 0  # Assume success if we can't determine
+
+            success = exit_code == 0
+            # Clear PID
+            db = SessionLocal()
+            try:
+                job = db.query(Job).filter(Job.id == job_id).first()
+                if job:
+                    job.pid = None
+                    db.commit()
+            finally:
+                db.close()
+            return success
+
+
+def _find_latest_checkpoint(output_dir: str, output_name: str) -> str | None:
+    """Find the latest checkpoint file (already renamed or raw) in output_dir."""
+    output_path = Path(output_dir)
+    if not output_path.exists():
+        return None
+    # Look for renamed checkpoints first (e.g. name-e001-s90.safetensors)
+    checkpoints = sorted(output_path.glob(f"{output_name}*.safetensors"), key=lambda p: p.stat().st_mtime)
+    if checkpoints:
+        return str(checkpoints[-1])
+    return None
+
+
+def _run_interleaved_job(job_id: str, start_cycle: int = 1, start_phase: str = "high_training") -> None:
+    """Orchestrator thread for interleaved high/low noise training with sampling.
+
+    Runs caching once, then loops through cycles:
+    1. High-noise training (1 epoch)
+    2. Low-noise training (1 epoch)
+    3. Generate sample (optional)
+    """
+    db = SessionLocal()
+    try:
+        job = db.query(Job).filter(Job.id == job_id).first()
+        if not job:
+            return
+
+        musubi_path = _get_setting(db, "musubi_tuner_path")
+        comfyui_models_path = _get_setting(db, "comfyui_models_path")
+
+        if not musubi_path:
+            job.status = "failed"
+            job.error_message = "musubi_tuner_path not configured in settings"
+            db.commit()
+            return
+
+        dataset_cfg = DatasetConfigForm.model_validate_json(job.dataset_config)
+        high_args = TrainingArgsForm.model_validate_json(job.training_args)
+        low_args = TrainingArgsForm.model_validate_json(job.training_args_low) if job.training_args_low else None
+        sample_cfg = SampleConfig.model_validate_json(job.sample_config) if job.sample_config else None
+        total_cycles = job.interleaved_total_cycles or high_args.max_train_epochs
+
+        if not low_args:
+            job.status = "failed"
+            job.error_message = "Interleaved job requires training_args_low"
+            db.commit()
+            return
+
+        log_file = str(config.log_dir / f"{job.id}.log")
+        job.log_file = log_file
+
+        # Write dataset TOML
+        toml_path = config.log_dir / f"{job.id}_dataset.toml"
+        toml_content = generate_dataset_toml(dataset_cfg)
+        toml_path.write_text(toml_content)
+
+        dataset_toml = str(toml_path)
+        vae = os.path.expanduser(high_args.vae_path)
+        t5 = os.path.expanduser(high_args.t5_path)
+
+        # Output directories
+        base_output = os.path.expanduser(high_args.output_dir)
+        high_output = os.path.join(base_output, "high_noise")
+        low_output = os.path.join(base_output, "low_noise")
+        samples_output = os.path.join(base_output, "samples")
+        logs_dir = os.path.expanduser(high_args.logging_dir)
+        os.makedirs(high_output, exist_ok=True)
+        os.makedirs(low_output, exist_ok=True)
+        os.makedirs(samples_output, exist_ok=True)
+        os.makedirs(logs_dir, exist_ok=True)
+
+        job.output_dir = base_output
+        job.tensorboard_dir = logs_dir
+        job.started_at = job.started_at or datetime.now(timezone.utc)
+        db.commit()
+
+        # Capture values needed after session close
+        job_name = job.name
+    finally:
+        db.close()
+
+    # Phase 0: Caching (run once)
+    if start_cycle == 1 and start_phase == "high_training":
+        if not _cache_is_populated_from_cfg(dataset_cfg):
+            db = SessionLocal()
+            try:
+                job = db.query(Job).filter(Job.id == job_id).first()
+                if not job:
+                    return
+                job.status = "caching_latents"
+                job.current_phase = "caching_latents"
+                job.interleaved_phase = "caching"
+                db.commit()
+            finally:
+                db.close()
+
+            # Generate caching script
+            cache_script = _generate_cache_script(musubi_path, dataset_toml, vae, t5)
+            cache_script_path = config.log_dir / f"{job_id}_cache.sh"
+            cache_script_path.write_text(cache_script)
+            cache_script_path.chmod(cache_script_path.stat().st_mode | stat.S_IEXEC)
+
+            if not _run_subprocess_and_wait(str(cache_script_path), log_file, job_id, "Caching"):
+                _mark_interleaved_failed(job_id, "Caching phase failed")
+                _advance_queue()
+                return
+
+    # Main cycle loop
+    phases = ["high_training", "low_training", "sampling"]
+
+    for cycle in range(start_cycle, total_cycles + 1):
+        for phase in phases:
+            # Skip phases we've already completed in the start cycle
+            if cycle == start_cycle and phases.index(phase) < phases.index(start_phase):
+                continue
+
+            # Update DB with current cycle/phase
+            db = SessionLocal()
+            try:
+                job = db.query(Job).filter(Job.id == job_id).first()
+                if not job or job.status in ("stopped", "cancelled"):
+                    return
+                job.interleaved_cycle = cycle
+                job.interleaved_phase = phase
+                job.progress_current = 0
+                job.progress_total = 0
+                db.commit()
+            finally:
+                db.close()
+
+            if phase == "high_training":
+                success = _run_interleaved_training_phase(
+                    job_id, cycle, musubi_path, dataset_toml, dataset_cfg, high_args,
+                    high_output, logs_dir, log_file, total_cycles, is_high=True,
+                )
+                if not success:
+                    if _job_was_stopped(job_id):
+                        return
+                    _mark_interleaved_failed(job_id, f"High noise training failed at cycle {cycle}")
+                    _advance_queue()
+                    return
+                # Rename checkpoints after each training phase
+                _rename_checkpoints_in_dir(job_id, high_output, high_args.output_name or job_name + "_high", cycle, total_cycles)
+
+            elif phase == "low_training":
+                success = _run_interleaved_training_phase(
+                    job_id, cycle, musubi_path, dataset_toml, dataset_cfg, low_args,
+                    low_output, logs_dir, log_file, total_cycles, is_high=False,
+                )
+                if not success:
+                    if _job_was_stopped(job_id):
+                        return
+                    _mark_interleaved_failed(job_id, f"Low noise training failed at cycle {cycle}")
+                    _advance_queue()
+                    return
+                _rename_checkpoints_in_dir(job_id, low_output, low_args.output_name or job_name + "_low", cycle, total_cycles)
+
+            elif phase == "sampling":
+                if not sample_cfg or not sample_cfg.enabled:
+                    continue
+
+                db = SessionLocal()
+                try:
+                    job = db.query(Job).filter(Job.id == job_id).first()
+                    if not job or job.status in ("stopped", "cancelled"):
+                        return
+                    job.current_phase = "sampling"
+                    job.status = "training"  # keep status as "training" for has_running_job
+                    db.commit()
+                finally:
+                    db.close()
+
+                _run_sample_phase(
+                    job_id, cycle, musubi_path, high_args, low_args,
+                    high_output, low_output, samples_output,
+                    vae, t5, sample_cfg, log_file,
+                )
+
+    # All cycles complete
+    db = SessionLocal()
+    try:
+        job = db.query(Job).filter(Job.id == job_id).first()
+        if job:
+            job.status = "completed"
+            job.completed_at = datetime.now(timezone.utc)
+            job.current_phase = "done"
+            job.pid = None
+            db.commit()
+    finally:
+        db.close()
+
+    # Clean up state dirs on completion
+    import shutil
+    for state_dir in Path(high_output).glob("*-state"):
+        if state_dir.is_dir():
+            shutil.rmtree(state_dir, ignore_errors=True)
+    for state_dir in Path(low_output).glob("*-state"):
+        if state_dir.is_dir():
+            shutil.rmtree(state_dir, ignore_errors=True)
+
+    _advance_queue()
+
+
+def _generate_cache_script(musubi_path: str, dataset_toml: str, vae: str, t5: str) -> str:
+    """Generate a bash script for caching latents and text encoder outputs."""
+    lines = [
+        "#!/bin/bash",
+        "set -e",
+        "export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True",
+        f"cd {musubi_path}",
+        "",
+        'if [ -f "venv/bin/activate" ]; then source venv/bin/activate; fi',
+        "",
+        'echo "### PHASE: caching_latents ###"',
+        f"python src/musubi_tuner/wan_cache_latents.py \\",
+        f"    --dataset_config {dataset_toml} \\",
+        f"    --vae {vae} \\",
+        f"    --i2v \\",
+        f"    --vae_cache_cpu \\",
+        f"    --batch_size 1",
+        "",
+        'echo "### PHASE: caching_text ###"',
+        f"python src/musubi_tuner/wan_cache_text_encoder_outputs.py \\",
+        f"    --dataset_config {dataset_toml} \\",
+        f"    --t5 {t5} \\",
+        f"    --batch_size 4",
+        "",
+        'echo "### PHASE: done ###"',
+    ]
+    return "\n".join(lines)
+
+
+def _cache_is_populated_from_cfg(cfg: DatasetConfigForm) -> bool:
+    """Check if cache is populated from a DatasetConfigForm directly."""
+    cache_dir = Path(os.path.expanduser(cfg.cache_directory))
+    if not cache_dir.exists():
+        return False
+    has_latents = any(cache_dir.glob("*_wan.safetensors"))
+    has_text = any(cache_dir.glob("*_wan_te.safetensors"))
+    return has_latents and has_text
+
+
+def _run_interleaved_training_phase(
+    job_id: str,
+    cycle: int,
+    musubi_path: str,
+    dataset_toml: str,
+    dataset_cfg: DatasetConfigForm,
+    training_args: TrainingArgsForm,
+    output_dir: str,
+    logs_dir: str,
+    log_file: str,
+    total_cycles: int,
+    is_high: bool,
+) -> bool:
+    """Run a single training phase (1 epoch) for interleaved training."""
+    noise_label = "high" if is_high else "low"
+
+    db = SessionLocal()
+    try:
+        job = db.query(Job).filter(Job.id == job_id).first()
+        if not job or job.status in ("stopped", "cancelled"):
+            return False
+        job.current_phase = f"{noise_label}_training"
+        job.status = "training"
+        db.commit()
+    finally:
+        db.close()
+
+    # Build training args with correct epoch target and output
+    args = training_args.model_copy()
+    args.max_train_epochs = cycle  # Train up to this epoch (resume skips prior)
+    args.save_every_n_epochs = 1
+    args.output_dir = output_dir
+    args.logging_dir = logs_dir
+    # Ensure distinct output names for high/low checkpoints
+    if not args.output_name:
+        args.output_name = f"interleaved_{noise_label}"
+    output_name = args.output_name
+
+    # Find resume state from previous cycle
+    resume_from = None
+    if cycle > 1:
+        state_dirs = sorted(Path(output_dir).glob(f"{output_name}*-state"), key=lambda p: p.name)
+        if state_dirs:
+            resume_from = str(state_dirs[-1])
+
+    # Use the existing generate_run_script but skip caching
+    db = SessionLocal()
+    try:
+        job = db.query(Job).filter(Job.id == job_id).first()
+        if not job:
+            return False
+
+        # Temporarily patch job fields for script generation
+        original_log = job.log_file
+        script = generate_run_script(
+            job, dataset_cfg, args, musubi_path, "",
+            skip_to_phase="training",
+            resume_from=resume_from,
+        )
+        job.log_file = original_log
+        db.commit()
+    finally:
+        db.close()
+
+    script_path = config.log_dir / f"{job_id}_{noise_label}_cycle{cycle}.sh"
+    script_path.write_text(script)
+    script_path.chmod(script_path.stat().st_mode | stat.S_IEXEC)
+
+    return _run_subprocess_and_wait(
+        str(script_path), log_file, job_id,
+        f"Cycle {cycle}/{total_cycles} — {noise_label.replace('_', ' ').title()} Noise Training",
+    )
+
+
+def _run_sample_phase(
+    job_id: str,
+    cycle: int,
+    musubi_path: str,
+    high_args: TrainingArgsForm,
+    low_args: TrainingArgsForm,
+    high_output: str,
+    low_output: str,
+    samples_output: str,
+    vae: str,
+    t5: str,
+    sample_cfg: SampleConfig,
+    log_file: str,
+) -> None:
+    """Run sample generation phase. Failures are logged but don't stop training."""
+    high_name = high_args.output_name or "interleaved_high"
+    low_name = low_args.output_name or "interleaved_low"
+
+    high_ckpt = _find_latest_checkpoint(high_output, high_name)
+    low_ckpt = _find_latest_checkpoint(low_output, low_name)
+
+    if not high_ckpt or not low_ckpt:
+        logger.warning("Skipping sample for cycle %d: missing checkpoints (high=%s, low=%s)", cycle, high_ckpt, low_ckpt)
+        return
+
+    output_path = os.path.join(samples_output, f"cycle_{cycle:03d}.mp4")
+    high_dit = os.path.expanduser(high_args.dit_path)
+    low_dit = os.path.expanduser(low_args.dit_path)
+
+    # Create Sample record
+    sample_id = str(uuid.uuid4())
+    start_time = time.time()
+    db = SessionLocal()
+    try:
+        sample = Sample(
+            id=sample_id,
+            job_id=job_id,
+            cycle=cycle,
+            video_path=output_path,
+            high_checkpoint=os.path.basename(high_ckpt),
+            low_checkpoint=os.path.basename(low_ckpt),
+            prompt=sample_cfg.prompt,
+            status="generating",
+        )
+        db.add(sample)
+        db.commit()
+    finally:
+        db.close()
+
+    # Generate and run sample script
+    script = generate_sample_script(
+        musubi_path, high_dit, low_dit, vae, t5,
+        high_ckpt, low_ckpt,
+        os.path.expanduser(sample_cfg.image_path),
+        sample_cfg.prompt, output_path,
+    )
+    script_path = config.log_dir / f"{job_id}_sample_cycle{cycle}.sh"
+    script_path.write_text(script)
+    script_path.chmod(script_path.stat().st_mode | stat.S_IEXEC)
+
+    success = _run_subprocess_and_wait(
+        str(script_path), log_file, job_id,
+        f"Cycle {cycle} — Sample Generation",
+    )
+
+    duration = time.time() - start_time
+    db = SessionLocal()
+    try:
+        sample = db.query(Sample).filter(Sample.id == sample_id).first()
+        if sample:
+            if success and os.path.exists(output_path):
+                sample.status = "completed"
+                sample.duration_seconds = duration
+            else:
+                sample.status = "failed"
+                sample.error_message = _extract_error_from_log(log_file) or "Sample generation failed"
+                sample.duration_seconds = duration
+            db.commit()
+    finally:
+        db.close()
+
+    if not success:
+        logger.warning("Sample generation failed for cycle %d of job %s — continuing training", cycle, job_id)
+
+
+def _rename_checkpoints_in_dir(job_id: str, output_dir: str, output_name: str, current_epoch: int, total_epochs: int) -> None:
+    """Rename checkpoints in a specific directory for interleaved jobs."""
+    output_path = Path(output_dir)
+    if not output_path.exists():
+        return
+
+    # Rename epoch checkpoints: {name}-000001.safetensors → {name}-e001-s{step}.safetensors
+    epoch_re = re.compile(re.escape(output_name) + r"-(\d{6})\.safetensors$")
+    for f in output_path.iterdir():
+        m = epoch_re.match(f.name)
+        if m:
+            epoch = int(m.group(1))
+            new_name = f"{output_name}-e{epoch:03d}.safetensors"
+            new_path = output_path / new_name
+            if not new_path.exists():
+                f.rename(new_path)
+
+
+def _mark_interleaved_failed(job_id: str, error: str) -> None:
+    db = SessionLocal()
+    try:
+        job = db.query(Job).filter(Job.id == job_id).first()
+        if job:
+            job.status = "failed"
+            job.error_message = error
+            job.completed_at = datetime.now(timezone.utc)
+            job.pid = None
+            db.commit()
+    finally:
+        db.close()
+
+
+def _job_was_stopped(job_id: str) -> bool:
+    db = SessionLocal()
+    try:
+        job = db.query(Job).filter(Job.id == job_id).first()
+        return job is not None and job.status in ("stopped", "cancelled")
+    finally:
+        db.close()
+
+
 def start_job(job_id: str, skip_to_phase: str | None = None, resume_from: str | None = None, network_weights: str | None = None) -> None:
     """Start a training job in a detached subprocess."""
     db = SessionLocal()
     try:
         job = db.query(Job).filter(Job.id == job_id).first()
         if not job:
+            return
+
+        # Dispatch interleaved jobs to their own orchestrator
+        if job.job_type == "interleaved":
+            db.close()
+            _run_interleaved_job(job_id)
             return
 
         musubi_path = _get_setting(db, "musubi_tuner_path")
@@ -252,7 +831,7 @@ def _is_training_process(pid: int) -> bool:
     try:
         cmdline = Path(f"/proc/{pid}/cmdline").read_bytes().decode("utf-8", errors="replace")
         # Match the training python processes OR the bash wrapper script
-        return "musubi" in cmdline or "wan_" in cmdline or "accelerate" in cmdline or "_run.sh" in cmdline
+        return "musubi" in cmdline or "wan_" in cmdline or "accelerate" in cmdline or "_run.sh" in cmdline or "_cache.sh" in cmdline or "_sample_" in cmdline or "_high_cycle" in cmdline or "_low_cycle" in cmdline
     except OSError:
         return False
 
@@ -556,8 +1135,6 @@ def resume_job(job_id: str) -> bool:
         if job.status not in ("stopped", "failed"):
             return False
 
-        resume_from, network_weights = _find_resume_artifacts(job)
-
         running = has_running_job()
 
         # Reset job state for re-run
@@ -566,18 +1143,45 @@ def resume_job(job_id: str) -> bool:
         job.pid = None
         job.progress_current = 0
 
-        if running:
-            job.status = "queued"
-            job.queue_position = _assign_queue_position(db)
-            db.commit()
+        if job.job_type == "interleaved":
+            # Determine resume point from saved cycle/phase
+            start_cycle = job.interleaved_cycle or 1
+            saved_phase = job.interleaved_phase or "high_training"
+
+            # If stopped during sampling, skip to next cycle's high_training
+            if saved_phase == "sampling":
+                start_cycle += 1
+                start_phase = "high_training"
+            else:
+                start_phase = saved_phase
+
+            if running:
+                job.status = "queued"
+                job.queue_position = _assign_queue_position(db)
+                db.commit()
+            else:
+                job.status = "pending"
+                db.commit()
+                threading.Thread(
+                    target=_run_interleaved_job,
+                    args=(job_id, start_cycle, start_phase),
+                    daemon=True,
+                ).start()
         else:
-            job.status = "pending"
-            db.commit()
-            threading.Thread(
-                target=start_job,
-                args=(job.id, "training", resume_from, network_weights),
-                daemon=True,
-            ).start()
+            resume_from, network_weights = _find_resume_artifacts(job)
+
+            if running:
+                job.status = "queued"
+                job.queue_position = _assign_queue_position(db)
+                db.commit()
+            else:
+                job.status = "pending"
+                db.commit()
+                threading.Thread(
+                    target=start_job,
+                    args=(job.id, "training", resume_from, network_weights),
+                    daemon=True,
+                ).start()
 
         return True
     finally:
@@ -598,10 +1202,18 @@ def reconcile_jobs() -> None:
                 if _is_training_process(job.pid):
                     # Process still alive — resume monitoring
                     has_active = True
-                    threading.Thread(target=_monitor_job, args=(job.id, job.pid), daemon=True).start()
+                    if job.job_type != "interleaved":
+                        threading.Thread(target=_monitor_job, args=(job.id, job.pid), daemon=True).start()
+                    # For interleaved: subprocess is alive but orchestrator thread is lost.
+                    # Just let the subprocess finish; user can resume the orchestrator later.
                 else:
-                    # Stale PID — try auto-resume before marking failed
-                    if not has_active and _auto_resume_job(job, db):
+                    if job.job_type == "interleaved":
+                        # Interleaved jobs: mark stopped for manual resume (safer)
+                        job.status = "stopped"
+                        job.completed_at = datetime.now(timezone.utc)
+                        job.pid = None
+                    elif not has_active and _auto_resume_job(job, db):
+                        # Stale PID — try auto-resume before marking failed
                         has_active = True
                     else:
                         job.status = "failed"
@@ -611,6 +1223,10 @@ def reconcile_jobs() -> None:
             else:
                 if job.status == "pending":
                     pass  # Pending jobs without PID are fine
+                elif job.job_type == "interleaved":
+                    # Interleaved job lost orchestrator — mark stopped
+                    job.status = "stopped"
+                    job.completed_at = datetime.now(timezone.utc)
                 elif job.dataset_config == "{}":
                     # Adopted job (no PID) — resume monitoring
                     has_active = True

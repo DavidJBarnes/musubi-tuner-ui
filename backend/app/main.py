@@ -31,6 +31,16 @@ def _migrate_columns() -> None:
                 conn.execute(text("ALTER TABLE jobs ADD COLUMN queue_position INTEGER"))
             if "dataset_name" not in cols:
                 conn.execute(text("ALTER TABLE jobs ADD COLUMN dataset_name VARCHAR(255)"))
+            if "interleaved_cycle" not in cols:
+                conn.execute(text("ALTER TABLE jobs ADD COLUMN interleaved_cycle INTEGER"))
+            if "interleaved_phase" not in cols:
+                conn.execute(text("ALTER TABLE jobs ADD COLUMN interleaved_phase VARCHAR(50)"))
+            if "interleaved_total_cycles" not in cols:
+                conn.execute(text("ALTER TABLE jobs ADD COLUMN interleaved_total_cycles INTEGER"))
+            if "training_args_low" not in cols:
+                conn.execute(text("ALTER TABLE jobs ADD COLUMN training_args_low TEXT"))
+            if "sample_config" not in cols:
+                conn.execute(text("ALTER TABLE jobs ADD COLUMN sample_config TEXT"))
 
 
 @asynccontextmanager
