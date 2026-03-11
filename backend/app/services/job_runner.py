@@ -198,6 +198,11 @@ def start_job(job_id: str, skip_to_phase: str | None = None, resume_from: str | 
         dataset_cfg = DatasetConfigForm.model_validate_json(job.dataset_config)
         training_args = TrainingArgsForm.model_validate_json(job.training_args)
 
+        # Skip caching if cache already exists for this dataset
+        if not skip_to_phase and _cache_is_populated(job):
+            logger.info("Cache already populated for job %s (%s), skipping to training", job.id, job.name)
+            skip_to_phase = "training"
+
         # Set up log file
         log_file = str(config.log_dir / f"{job.id}.log")
         job.log_file = log_file
