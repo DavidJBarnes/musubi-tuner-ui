@@ -699,6 +699,20 @@ def _assign_queue_position(db: Session) -> int:
     return (max_pos or 0) + 1
 
 
+def _cache_is_populated(job: Job) -> bool:
+    """Check if the dataset cache directory already has latent and text encoder files."""
+    try:
+        cfg = DatasetConfigForm.model_validate_json(job.dataset_config)
+    except Exception:
+        return False
+    cache_dir = Path(os.path.expanduser(cfg.cache_directory))
+    if not cache_dir.exists():
+        return False
+    has_latents = any(cache_dir.glob("*_wan.safetensors"))
+    has_text = any(cache_dir.glob("*_wan_te.safetensors"))
+    return has_latents and has_text
+
+
 def _advance_queue() -> None:
     """Find the lowest queue_position job with status 'queued' and start it."""
     db = SessionLocal()
@@ -715,6 +729,10 @@ def _advance_queue() -> None:
         next_job.queue_position = None
         db.commit()
 
-        threading.Thread(target=start_job, args=(next_job.id,), daemon=True).start()
+        skip_to_phase = "training" if _cache_is_populated(next_job) else None
+        if skip_to_phase:
+            logger.info("Cache already populated for job %s (%s), skipping to training", next_job.id, next_job.name)
+
+        threading.Thread(target=start_job, args=(next_job.id, skip_to_phase), daemon=True).start()
     finally:
         db.close()
