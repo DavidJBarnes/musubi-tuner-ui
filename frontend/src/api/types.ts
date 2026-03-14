@@ -83,6 +83,24 @@ export interface TrainingArgs {
   seed: number;
 }
 
+export interface SampleConfig {
+  enabled: boolean;
+  image_path: string;
+  prompt: string;
+}
+
+export interface SampleInfo {
+  id: string;
+  cycle: number;
+  high_checkpoint: string;
+  low_checkpoint: string;
+  prompt: string;
+  status: string;
+  error_message: string | null;
+  created_at: string;
+  duration_seconds: number | null;
+}
+
 export interface Job {
   id: string;
   name: string;
@@ -99,11 +117,16 @@ export interface Job {
   error_message: string | null;
   queue_position: number | null;
   dataset_name: string | null;
+  interleaved_cycle: number | null;
+  interleaved_phase: string | null;
+  interleaved_total_cycles: number | null;
 }
 
 export interface JobDetail extends Job {
   dataset_config: string;
   training_args: string;
+  training_args_low: string | null;
+  sample_config: string | null;
   tensorboard_dir: string | null;
   log_file: string | null;
 }
@@ -111,6 +134,14 @@ export interface JobDetail extends Job {
 export interface LossPoint {
   step: number;
   value: number;
+}
+
+export interface JobEvent {
+  id: string;
+  event_type: string;
+  message: string | null;
+  details: Record<string, unknown> | null;
+  created_at: string;
 }
 
 export interface JobStats {
@@ -121,4 +152,7 @@ export interface JobStats {
   total: number;
   save_every_n_epochs: number;
   avr_loss: number | null;
+  interleaved_cycle?: number | null;
+  interleaved_phase?: string | null;
+  interleaved_total_cycles?: number | null;
 }

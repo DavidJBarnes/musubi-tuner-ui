@@ -31,6 +31,31 @@ def _migrate_columns() -> None:
                 conn.execute(text("ALTER TABLE jobs ADD COLUMN queue_position INTEGER"))
             if "dataset_name" not in cols:
                 conn.execute(text("ALTER TABLE jobs ADD COLUMN dataset_name VARCHAR(255)"))
+            if "interleaved_cycle" not in cols:
+                conn.execute(text("ALTER TABLE jobs ADD COLUMN interleaved_cycle INTEGER"))
+            if "interleaved_phase" not in cols:
+                conn.execute(text("ALTER TABLE jobs ADD COLUMN interleaved_phase VARCHAR(50)"))
+            if "interleaved_total_cycles" not in cols:
+                conn.execute(text("ALTER TABLE jobs ADD COLUMN interleaved_total_cycles INTEGER"))
+            if "training_args_low" not in cols:
+                conn.execute(text("ALTER TABLE jobs ADD COLUMN training_args_low TEXT"))
+            if "sample_config" not in cols:
+                conn.execute(text("ALTER TABLE jobs ADD COLUMN sample_config TEXT"))
+
+    # JobEvents table
+    if not insp.has_table("job_events"):
+        with engine.begin() as conn:
+            conn.execute(text("""
+                CREATE TABLE job_events (
+                    id TEXT PRIMARY KEY,
+                    job_id TEXT REFERENCES jobs(id),
+                    event_type TEXT NOT NULL,
+                    message TEXT,
+                    details TEXT,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+            """))
+            conn.execute(text("CREATE INDEX IF NOT EXISTS ix_job_events_job_id ON job_events(job_id)"))
 
 
 @asynccontextmanager

@@ -8,16 +8,23 @@ interface Props {
   totalEpochs: number;
   saveEveryNEpochs: number;
   avrLoss?: number | null;
+  interleavedCycle?: number | null;
+  interleavedPhase?: string | null;
+  interleavedTotalCycles?: number | null;
 }
 
 const PHASE_LABELS: Record<string, string> = {
   caching_latents: "Caching Latents",
   caching_text: "Caching Text Encoder",
   training: "Training",
+  high_training: "High Noise Training",
+  low_training: "Low Noise Training",
+  sampling: "Generating Sample",
+  caching: "Caching",
   done: "Done",
 };
 
-export function ProgressBar({ current, total, phase, status, speed, epoch, totalEpochs, saveEveryNEpochs, avrLoss }: Props) {
+export function ProgressBar({ current, total, phase, status, speed, epoch, totalEpochs, saveEveryNEpochs, avrLoss, interleavedCycle, interleavedPhase, interleavedTotalCycles }: Props) {
   const pct = total > 0 ? Math.floor((current / total) * 100) : 0;
   const stepsPerEpoch = totalEpochs > 0 && total > 0 ? total / totalEpochs : 0;
 
@@ -29,12 +36,20 @@ export function ProgressBar({ current, total, phase, status, speed, epoch, total
     return h > 0 ? `${h}h ${m}m` : `${m}m`;
   };
 
+  // Use interleaved phase if available, otherwise fall back to current_phase
+  const displayPhase = interleavedPhase || phase;
+
   return (
     <div className="bg-surface-2 rounded-lg border border-border p-4">
       <div className="flex justify-between items-center mb-1">
         <span className="text-sm font-medium">
-          {phase ? PHASE_LABELS[phase] ?? phase : status.replace(/_/g, " ")}
-          {epoch > 0 && totalEpochs > 0 && (
+          {displayPhase ? PHASE_LABELS[displayPhase] ?? displayPhase.replace(/_/g, " ") : status.replace(/_/g, " ")}
+          {interleavedCycle != null && interleavedTotalCycles != null && interleavedCycle > 0 && (
+            <span className="text-text-dim font-normal ml-2">
+              Cycle {interleavedCycle}/{interleavedTotalCycles}
+            </span>
+          )}
+          {!interleavedCycle && epoch > 0 && totalEpochs > 0 && (
             <span className="text-text-dim font-normal ml-2">
               Epoch {epoch}/{totalEpochs}
             </span>

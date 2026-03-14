@@ -132,12 +132,35 @@ class TomlGenerateRequest(BaseModel):
     training_args: TrainingArgsForm
 
 
+# --- Sampling ---
+class SampleConfig(BaseModel):
+    enabled: bool = False
+    image_path: str = ""
+    prompt: str = ""
+
+
+class SampleRead(BaseModel):
+    id: str
+    cycle: int
+    high_checkpoint: str
+    low_checkpoint: str
+    prompt: str
+    status: str
+    error_message: str | None = None
+    created_at: datetime
+    duration_seconds: float | None = None
+
+    model_config = {"from_attributes": True}
+
+
 # --- Jobs ---
 class JobCreate(BaseModel):
     name: str
-    job_type: str  # high_noise | low_noise | both
+    job_type: str  # high_noise | low_noise | interleaved
     dataset_config: DatasetConfigForm
     training_args: TrainingArgsForm
+    training_args_low: TrainingArgsForm | None = None
+    sample_config: SampleConfig | None = None
     dataset_name: str | None = None
 
 
@@ -165,6 +188,9 @@ class JobRead(BaseModel):
     error_message: str | None = None
     queue_position: int | None = None
     dataset_name: str | None = None
+    interleaved_cycle: int | None = None
+    interleaved_phase: str | None = None
+    interleaved_total_cycles: int | None = None
 
     model_config = {"from_attributes": True}
 
@@ -172,10 +198,26 @@ class JobRead(BaseModel):
 class JobDetail(JobRead):
     dataset_config: str = ""
     training_args: str = ""
+    training_args_low: str | None = None
+    sample_config: str | None = None
     tensorboard_dir: str | None = None
     log_file: str | None = None
 
     model_config = {"from_attributes": True}
+
+
+class JobEventRead(BaseModel):
+    id: str
+    event_type: str
+    message: str | None = None
+    details: dict | None = None
+    created_at: datetime
+
+    model_config = {"from_attributes": True}
+
+
+class ContinueJobRequest(BaseModel):
+    additional_epochs: int
 
 
 class LossPoint(BaseModel):
