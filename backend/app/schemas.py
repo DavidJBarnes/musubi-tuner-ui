@@ -206,6 +206,20 @@ class JobDetail(JobRead):
     model_config = {"from_attributes": True}
 
 
+class JobEventRead(BaseModel):
+    id: str
+    event_type: str
+    message: str | None = None
+    details: dict | None = None
+    created_at: datetime
+
+    model_config = {"from_attributes": True}
+
+
+class ContinueJobRequest(BaseModel):
+    additional_epochs: int
+
+
 class LossPoint(BaseModel):
     step: int
     value: float

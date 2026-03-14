@@ -12,9 +12,9 @@ from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 
 from ..database import get_db
-from ..models import Job, Sample
-from ..schemas import JobAdopt, JobCreate, JobDetail, JobRead, LossPoint, PaginatedResponse, SampleRead
-from ..services.job_runner import cancel_job, stop_job, resume_job, has_running_job, start_job, adopt_job, _assign_queue_position, _rename_checkpoints
+from ..models import Job, JobEvent, Sample
+from ..schemas import ContinueJobRequest, JobAdopt, JobCreate, JobDetail, JobEventRead, JobRead, LossPoint, PaginatedResponse, SampleRead
+from ..services.job_runner import cancel_job, continue_job, stop_job, resume_job, has_running_job, start_job, adopt_job, _assign_queue_position, _rename_checkpoints
 from ..services.progress import parse_progress_from_log
 from ..services.log_streamer import tail_log
 from ..services.tb_reader import read_loss_curve
@@ -336,3 +336,41 @@ def stream_sample_video(job_id: str, sample_id: str, db: Session = Depends(get_d
     if not os.path.isfile(sample.video_path):
         raise HTTPException(404, "Video file not found")
     return FileResponse(sample.video_path, media_type="video/mp4")
+
+
+@router.get("/{job_id}/events", response_model=list[JobEventRead])
+def list_events(job_id: str, db: Session = Depends(get_db)):
+    """List job lifecycle events."""
+    job = db.query(Job).filter(Job.id == job_id).first()
+    if not job:
+        raise HTTPException(404, "Job not found")
+    events = (
+        db.query(JobEvent)
+        .filter(JobEvent.job_id == job_id)
+        .order_by(JobEvent.created_at.desc())
+        .all()
+    )
+    # Parse JSON details string back to dict for response
+    result = []
+    for e in events:
+        data = JobEventRead.model_validate(e)
+        if e.details:
+            try:
+                data.details = json.loads(e.details)
+            except (json.JSONDecodeError, TypeError):
+                data.details = None
+        result.append(data)
+    return result
+
+
+@router.post("/{job_id}/continue", response_model=JobRead)
+def continue_job_endpoint(job_id: str, body: ContinueJobRequest, db: Session = Depends(get_db)):
+    """Continue a completed job for additional epochs."""
+    job = db.query(Job).filter(Job.id == job_id).first()
+    if not job:
+        raise HTTPException(404, "Job not found")
+    if job.status != "completed":
+        raise HTTPException(400, f"Cannot continue a job with status '{job.status}'")
+    continue_job(job_id, body.additional_epochs)
+    db.refresh(job)
+    return job

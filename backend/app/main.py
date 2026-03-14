@@ -42,6 +42,21 @@ def _migrate_columns() -> None:
             if "sample_config" not in cols:
                 conn.execute(text("ALTER TABLE jobs ADD COLUMN sample_config TEXT"))
 
+    # JobEvents table
+    if not insp.has_table("job_events"):
+        with engine.begin() as conn:
+            conn.execute(text("""
+                CREATE TABLE job_events (
+                    id TEXT PRIMARY KEY,
+                    job_id TEXT REFERENCES jobs(id),
+                    event_type TEXT NOT NULL,
+                    message TEXT,
+                    details TEXT,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+            """))
+            conn.execute(text("CREATE INDEX IF NOT EXISTS ix_job_events_job_id ON job_events(job_id)"))
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):

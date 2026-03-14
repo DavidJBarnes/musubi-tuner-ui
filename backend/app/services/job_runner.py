@@ -17,7 +17,7 @@ from sqlalchemy.orm import Session
 
 from ..config import config
 from ..database import SessionLocal
-from ..models import Job, Sample, Setting
+from ..models import Job, JobEvent, Sample, Setting
 from ..schemas import DatasetConfigForm, SampleConfig, TrainingArgsForm
 from .progress import parse_progress_from_log
 
@@ -27,6 +27,18 @@ logger = logging.getLogger(__name__)
 def _get_setting(db: Session, key: str) -> str:
     s = db.query(Setting).filter(Setting.key == key).first()
     return s.value if s else ""
+
+
+def _log_event(db: Session, job_id: str, event_type: str, message: str | None = None, details: dict | None = None) -> None:
+    """Record a job lifecycle event."""
+    event = JobEvent(
+        job_id=job_id,
+        event_type=event_type,
+        message=message,
+        details=json.dumps(details) if details else None,
+    )
+    db.add(event)
+    db.flush()
 
 
 def generate_run_script(
@@ -496,18 +508,10 @@ def _run_interleaved_job(job_id: str, start_cycle: int = 1, start_phase: str = "
             job.completed_at = datetime.now(timezone.utc)
             job.current_phase = "done"
             job.pid = None
+            _log_event(db, job_id, "completed", f"Interleaved training finished ({job.interleaved_total_cycles} cycles)")
             db.commit()
     finally:
         db.close()
-
-    # Clean up state dirs on completion
-    import shutil
-    for state_dir in Path(high_output).glob("*-state"):
-        if state_dir.is_dir():
-            shutil.rmtree(state_dir, ignore_errors=True)
-    for state_dir in Path(low_output).glob("*-state"):
-        if state_dir.is_dir():
-            shutil.rmtree(state_dir, ignore_errors=True)
 
     _advance_queue()
 
@@ -797,8 +801,11 @@ def start_job(job_id: str, skip_to_phase: str | None = None, resume_from: str | 
         script_path.write_text(script_content)
         script_path.chmod(script_path.stat().st_mode | stat.S_IEXEC)
 
-        # Spawn detached process
-        with open(log_file, "w") as log_fd:
+        # Spawn detached process (append mode to preserve logs across resumes)
+        is_resume = resume_from is not None or network_weights is not None
+        with open(log_file, "a") as log_fd:
+            if is_resume:
+                log_fd.write(f"\n\n=== Resumed at {datetime.now(timezone.utc).isoformat()} ===\n\n")
             proc = subprocess.Popen(
                 ["bash", str(script_path)],
                 stdout=log_fd,
@@ -809,9 +816,16 @@ def start_job(job_id: str, skip_to_phase: str | None = None, resume_from: str | 
 
         job.pid = proc.pid
         job.status = skip_to_phase or "caching_latents"
-        job.started_at = datetime.now(timezone.utc)
+        if not job.started_at:
+            job.started_at = datetime.now(timezone.utc)
         job.tensorboard_dir = os.path.expanduser(training_args.logging_dir)
         job.output_dir = os.path.expanduser(training_args.output_dir)
+        msg = f"Training phase: {skip_to_phase or 'caching_latents'}"
+        if resume_from:
+            msg = f"Resumed from state dir ({os.path.basename(resume_from)})"
+        elif network_weights:
+            msg = f"Resumed from checkpoint ({os.path.basename(network_weights)})"
+        _log_event(db, job_id, "started", msg, {"phase": skip_to_phase or "caching_latents"})
         db.commit()
 
         # Start background monitor thread
@@ -821,6 +835,7 @@ def start_job(job_id: str, skip_to_phase: str | None = None, resume_from: str | 
         logger.exception("Failed to start job %s", job_id)
         job.status = "failed"
         job.error_message = str(e)
+        _log_event(db, job_id, "failed", str(e))
         db.commit()
     finally:
         db.close()
@@ -865,15 +880,17 @@ def _monitor_job(job_id: str, pid: int) -> None:
                 if exit_code == 0 or _log_has_done_phase(job.log_file):
                     job.status = "completed"
                     completed = True
+                    _log_event(db, job_id, "completed", f"Finished at epoch {job.progress_current}/{job.progress_total}")
                 else:
                     job.status = "failed"
                     job.error_message = _extract_error_from_log(job.log_file) or f"Process exited with code {exit_code}"
                     completed = False
+                    _log_event(db, job_id, "failed", job.error_message)
                 job.completed_at = datetime.now(timezone.utc)
                 job.pid = None
                 db.commit()
                 if completed:
-                    _rename_checkpoints(job_id, cleanup_state=True)
+                    _rename_checkpoints(job_id, cleanup_state=False)
                 _advance_queue()
                 return
 
@@ -885,8 +902,9 @@ def _monitor_job(job_id: str, pid: int) -> None:
                     job.status = "completed"
                     job.completed_at = datetime.now(timezone.utc)
                     job.pid = None
+                    _log_event(db, job_id, "completed", f"Finished at epoch {progress.get('epoch', '?')}")
                     db.commit()
-                    _rename_checkpoints(job_id, cleanup_state=True)
+                    _rename_checkpoints(job_id, cleanup_state=False)
                     _advance_queue()
                     return
                 elif progress["phase"] in ("caching_latents", "caching_text", "training"):
@@ -1047,6 +1065,7 @@ def stop_job(job_id: str) -> bool:
         job.status = "stopped"
         job.completed_at = datetime.now(timezone.utc)
         job.pid = None
+        _log_event(db, job_id, "stopped", f"User stopped at progress {job.progress_current}/{job.progress_total}")
         db.commit()
 
         _advance_queue()
@@ -1142,6 +1161,7 @@ def resume_job(job_id: str) -> bool:
         job.completed_at = None
         job.pid = None
         job.progress_current = 0
+        _log_event(db, job_id, "resumed", f"Resumed from {job.status}")
 
         if job.job_type == "interleaved":
             # Determine resume point from saved cycle/phase
@@ -1186,6 +1206,57 @@ def resume_job(job_id: str) -> bool:
         return True
     finally:
         db.close()
+
+
+def continue_job(job_id: str, additional_epochs: int) -> bool:
+    """Continue a completed job for additional epochs."""
+    db = SessionLocal()
+    try:
+        job = db.query(Job).filter(Job.id == job_id).first()
+        if not job or job.status != "completed":
+            return False
+
+        # Update max_train_epochs in training_args
+        try:
+            args = json.loads(job.training_args)
+        except (json.JSONDecodeError, TypeError):
+            return False
+
+        old_epochs = args.get("max_train_epochs", 0)
+        new_epochs = old_epochs + additional_epochs
+        args["max_train_epochs"] = new_epochs
+        job.training_args = json.dumps(args)
+
+        # For interleaved jobs, also update total cycles
+        if job.job_type == "interleaved":
+            old_cycles = job.interleaved_total_cycles or old_epochs
+            job.interleaved_total_cycles = old_cycles + additional_epochs
+
+            # Also update low noise args if present
+            if job.training_args_low:
+                try:
+                    low_args = json.loads(job.training_args_low)
+                    low_args["max_train_epochs"] = new_epochs
+                    job.training_args_low = json.dumps(low_args)
+                except (json.JSONDecodeError, TypeError):
+                    pass
+
+        _log_event(db, job_id, "config_changed",
+                   f"Extended training: {old_epochs} → {new_epochs} epochs (+{additional_epochs})",
+                   {"old_epochs": old_epochs, "new_epochs": new_epochs})
+
+        # Reset status so resume logic can pick it up
+        job.status = "stopped"
+        job.completed_at = None
+        db.commit()
+
+        # Now use resume_job to handle the rest (finding artifacts, starting)
+        db.close()
+        return resume_job(job_id)
+    except Exception:
+        logger.exception("Failed to continue job %s", job_id)
+        db.close()
+        return False
 
 
 def reconcile_jobs() -> None:
@@ -1348,12 +1419,32 @@ def _advance_queue() -> None:
             return
 
         next_job.queue_position = None
+        _log_event(db, next_job.id, "started", "Auto-started from queue")
         db.commit()
 
         skip_to_phase = "training" if _cache_is_populated(next_job) else None
         if skip_to_phase:
             logger.info("Cache already populated for job %s (%s), skipping to training", next_job.id, next_job.name)
 
-        threading.Thread(target=start_job, args=(next_job.id, skip_to_phase), daemon=True).start()
+        # Find resume artifacts so queued jobs that were stopped mid-training resume properly
+        resume_from, network_weights = _find_resume_artifacts(next_job)
+        if resume_from or network_weights:
+            skip_to_phase = "training"
+            logger.info("Queue advancing job %s with resume artifact: %s", next_job.id, resume_from or network_weights)
+
+        if next_job.job_type == "interleaved":
+            start_cycle = next_job.interleaved_cycle or 1
+            start_phase = next_job.interleaved_phase or "high_training"
+            threading.Thread(
+                target=_run_interleaved_job,
+                args=(next_job.id, start_cycle, start_phase),
+                daemon=True,
+            ).start()
+        else:
+            threading.Thread(
+                target=start_job,
+                args=(next_job.id, skip_to_phase, resume_from, network_weights),
+                daemon=True,
+            ).start()
     finally:
         db.close()

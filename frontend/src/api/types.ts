@@ -136,6 +136,14 @@ export interface LossPoint {
   value: number;
 }
 
+export interface JobEvent {
+  id: string;
+  event_type: string;
+  message: string | null;
+  details: Record<string, unknown> | null;
+  created_at: string;
+}
+
 export interface JobStats {
   speed: number | null;
   epoch: number;
